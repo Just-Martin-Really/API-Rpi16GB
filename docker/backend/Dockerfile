@@ -8,9 +8,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zig for aarch64 (RPi 5 is ARM64)
-RUN curl -fsSL https://ziglang.org/download/${ZIG_VERSION}/zig-linux-aarch64-${ZIG_VERSION}.tar.xz \
+RUN curl -fsSL https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-linux-${ZIG_VERSION}.tar.xz \
     | tar -xJ -C /opt \
-    && ln -s /opt/zig-linux-aarch64-${ZIG_VERSION}/zig /usr/local/bin/zig
+    && ln -s /opt/zig-aarch64-linux-${ZIG_VERSION}/zig /usr/local/bin/zig
 
 WORKDIR /build
 COPY build.zig .
