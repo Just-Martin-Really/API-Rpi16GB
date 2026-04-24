@@ -1,8 +1,14 @@
 const std = @import("std");
+const db = @import("db.zig");
 const health = @import("handlers/health.zig");
 const sensor = @import("handlers/sensor.zig");
 
-pub fn dispatch(request: *std.http.Server.Request) !void {
+pub fn dispatch(
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    read_db: *db.Db,
+    write_db: *db.Db,
+) !void {
     const target = request.head.target;
     const method = request.head.method;
 
@@ -12,8 +18,8 @@ pub fn dispatch(request: *std.http.Server.Request) !void {
 
     if (std.mem.startsWith(u8, target, "/api/v1/sensor-data")) {
         return switch (method) {
-            .GET => sensor.getAll(request),
-            .POST => sensor.create(request),
+            .GET => sensor.getAll(request, allocator, read_db),
+            .POST => sensor.create(request, allocator, write_db),
             else => notAllowed(request),
         };
     }

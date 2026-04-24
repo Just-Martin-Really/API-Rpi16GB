@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("libpq-fe.h");
 });
 
@@ -42,7 +42,7 @@ pub const Db = struct {
         }
     }
 
-    /// Execute a parameterised query (safe against SQL injection).
+    /// Execute a parameterised SELECT — caller must call clearResult on the returned result.
     pub fn queryParams(
         self: *Db,
         sql: [*:0]const u8,
@@ -65,4 +65,42 @@ pub const Db = struct {
         }
         return result;
     }
+
+    /// Execute a parameterised INSERT/UPDATE/DELETE.
+    pub fn execParams(
+        self: *Db,
+        sql: [*:0]const u8,
+        params: []const [*:0]const u8,
+    ) !void {
+        const result = c.PQexecParams(
+            self.conn,
+            sql,
+            @intCast(params.len),
+            null,
+            @ptrCast(params.ptr),
+            null,
+            null,
+            0,
+        ) orelse return error.OutOfMemory;
+        defer c.PQclear(result);
+        if (c.PQresultStatus(result) != c.PGRES_COMMAND_OK) {
+            std.log.err("exec error: {s}", .{c.PQerrorMessage(self.conn)});
+            return error.ExecFailed;
+        }
+    }
 };
+
+/// Number of rows in a result set.
+pub fn numRows(result: *c.PGresult) usize {
+    return @intCast(c.PQntuples(result));
+}
+
+/// Value of a cell as a UTF-8 slice. Never returns null (NULL DB values become empty string).
+pub fn getValue(result: *c.PGresult, row: usize, col: usize) []const u8 {
+    return std.mem.sliceTo(c.PQgetvalue(result, @intCast(row), @intCast(col)), 0);
+}
+
+/// Free a result returned by query() or queryParams().
+pub fn clearResult(result: *c.PGresult) void {
+    c.PQclear(result);
+}
