@@ -15,11 +15,19 @@ pub fn run(io: Io, port: u16) !void {
             std.log.err("accept error: {}", .{err});
             continue;
         };
-        // TODO: spawn a concurrent task per connection for parallelism
-        handleConnection(io, stream) catch |err| {
-            std.log.err("connection error: {}", .{err});
+        const t = std.Thread.spawn(.{}, connectionWorker, .{ io, stream }) catch |err| {
+            std.log.err("thread spawn failed: {}", .{err});
+            stream.close(io);
+            continue;
         };
+        t.detach();
     }
+}
+
+fn connectionWorker(io: Io, stream: net.Stream) void {
+    handleConnection(io, stream) catch |err| {
+        std.log.err("connection error: {}", .{err});
+    };
 }
 
 fn handleConnection(io: Io, stream: net.Stream) !void {
