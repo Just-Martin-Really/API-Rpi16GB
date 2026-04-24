@@ -5,10 +5,12 @@ const c = @cImport(@cInclude("stdio.h"));
 fn readSecret(path: [*:0]const u8, buf: []u8) ![:0]u8 {
     const f = c.fopen(path, "r") orelse return error.SecretFileNotFound;
     defer _ = c.fclose(f);
-    const n = c.fread(buf.ptr, 1, buf.len - 1, f);
-    const trimmed = std.mem.trimRight(u8, buf[0..n], " \n\r");
-    buf[trimmed.len] = 0;
-    return buf[0..trimmed.len :0];
+    var len = c.fread(buf.ptr, 1, buf.len - 1, f);
+    while (len > 0 and (buf[len - 1] == ' ' or buf[len - 1] == '\n' or buf[len - 1] == '\r')) {
+        len -= 1;
+    }
+    buf[len] = 0;
+    return buf[0..len :0];
 }
 
 pub fn main() !void {
