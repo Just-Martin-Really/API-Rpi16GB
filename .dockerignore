@@ -1,0 +1,10 @@
+# Exclude files not needed inside the Docker build context
+.git
+.idea
+.vscode
+docs
+docker
+*.md
+zig-cache
+.zig-cache
+zig-out
