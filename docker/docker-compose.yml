@@ -1,0 +1,82 @@
+networks:
+  app-net:
+    driver: bridge
+  sensor-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  db_write_password:
+    file: ./secrets/db_write_password.txt
+  db_read_password:
+    file: ./secrets/db_read_password.txt
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sensor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - app-net
+    # Not exposed to the host — only reachable inside app-net
+
+  # ── Zig backend ────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: sensor
+    secrets:
+      - db_write_password
+      - db_read_password
+    networks:
+      - app-net
+    depends_on:
+      - postgres
+
+  # ── nginx reverse proxy ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # TLS cert + key are provisioned on the host by the CA setup step
+      - /etc/ssl/backend/backend.crt:/etc/nginx/ssl/backend.crt:ro
+      - /etc/ssl/backend/backend.key:/etc/nginx/ssl/backend.key:ro
+    networks:
+      - app-net
+    depends_on:
+      - backend
+
+  # ── MQTT broker (sensor-net) ───────────────────────────────────────────────
+  # Uncomment when sensor integration is ready.
+  # mosquitto:
+  #   image: eclipse-mosquitto:2
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+  #     - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+  #   networks:
+  #     - sensor-net
+  #     - app-net

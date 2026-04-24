@@ -1,0 +1,19 @@
+# Zig build artifacts
+zig-out/
+zig-cache/
+.zig-cache/
+
+# Docker secrets (never commit these)
+docker/secrets/
+
+# Environment overrides
+.env
+.env.local
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
