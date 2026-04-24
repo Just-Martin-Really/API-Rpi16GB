@@ -14,6 +14,7 @@ RUN curl -fsSL https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-linux-${Z
 
 WORKDIR /build
 COPY build.zig .
+ARG CACHE_BUST=1
 COPY src/ src/
 
 RUN zig build -Doptimize=ReleaseSafe
