@@ -216,6 +216,11 @@ make run
 | `std.http.Server.init(connection, &buf)` | `std.http.Server.init(&reader.interface, &writer.interface)` |
 | `request.reader()` | `request.readerExpectNone(&buf)` |
 | `reader.readAll(&buf)` | `reader.readSliceShort(&buf)` |
+| `std.fs.openFileAbsolute(...)` | removed — use C `fopen` via `@cImport(@cInclude("stdio.h"))` |
+| `std.fs.cwd()` | removed — same workaround as above |
+| `std.mem.trimRight(T, slice, chars)` | removed — inline the loop |
+| `std.ArrayList(T).init(allocator)` | removed — use a heap-allocated fixed buffer or `ArrayListUnmanaged` |
+| `@cInclude("libpq-fe.h")` | use `@cInclude("postgresql/libpq-fe.h")` on Debian (no pkg-config in container) |
 
 Networking now requires a `std.Io.Threaded` instance — create it in `main` and pass `io` down to anything that does network I/O.
 
