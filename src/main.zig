@@ -1,10 +1,11 @@
 const std = @import("std");
 const server = @import("server.zig");
+const c = @cImport(@cInclude("stdio.h"));
 
-fn readSecret(path: []const u8, buf: []u8) ![:0]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const n = try file.readAll(buf);
+fn readSecret(path: [*:0]const u8, buf: []u8) ![:0]u8 {
+    const f = c.fopen(path, "r") orelse return error.SecretFileNotFound;
+    defer _ = c.fclose(f);
+    const n = c.fread(buf.ptr, 1, buf.len - 1, f);
     const trimmed = std.mem.trimRight(u8, buf[0..n], " \n\r");
     buf[trimmed.len] = 0;
     return buf[0..trimmed.len :0];
