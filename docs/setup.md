@@ -57,7 +57,15 @@ sudo nmcli connection modify "Production" connection.autoconnect yes
 
 After this the Pi will reconnect to Production automatically on every boot. All further access is via the Production network (`192.168.50.x`).
 
-### 1.5 Install Docker
+### 1.5 Disable WiFi Power Saving
+
+By default the Pi's WiFi chip enters power save mode, which causes it to miss incoming frames — making it unreachable from the network while still being able to initiate outbound connections. Disable it permanently:
+
+```sh
+printf '[connection]\nwifi.powersave = 2\n' | sudo tee /etc/NetworkManager/conf.d/wifi-powersave.conf && sudo systemctl reload NetworkManager
+```
+
+### 1.6 Install Docker
 
 ```sh
 curl -fsSL https://get.docker.com | sh
@@ -70,14 +78,14 @@ Log out and back in, then verify:
 docker run --rm hello-world
 ```
 
-### 1.6 Install Git and Clone the Repo
+### 1.7 Install Git and Clone the Repo
 
 ```sh
 sudo apt install -y git
 git clone https://github.com/Just-Martin-Really/API-Rpi16GB.git ~/API-Rpi16GB
 ```
 
-### 1.7 Create Secrets
+### 1.8 Create Secrets
 
 Passwords are never stored in the repo. Generate them on the Pi and store locally:
 
@@ -97,7 +105,7 @@ echo "<read_password>"      > ~/API-Rpi16GB/docker/secrets/db_read_password.txt
 chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 ```
 
-### 1.8 Provision TLS Certificate
+### 1.9 Provision TLS Certificate
 
 nginx expects a certificate and key at `/etc/ssl/backend/` on the Pi host. For testing, generate a self-signed one:
 
@@ -113,7 +121,7 @@ For production, copy the certificate issued by the project CA from the WLAN-AP.
 
 > Note: run openssl as a single line — the backslash continuation only works in bash, not all shells.
 
-### 1.9 Host Firewall (iptables)
+### 1.10 Host Firewall (iptables)
 
 Docker manages its own iptables rules for the bridge networks automatically. Additionally, restrict SSH access on the host:
 
