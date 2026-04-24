@@ -2,7 +2,7 @@ const std = @import("std");
 const server = @import("server.zig");
 
 fn readSecret(path: []const u8, buf: []u8) ![:0]u8 {
-    const file = try std.fs.openFileAbsolute(path, .{});
+    const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
     const n = try file.readAll(buf);
     const trimmed = std.mem.trimRight(u8, buf[0..n], " \n\r");
