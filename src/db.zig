@@ -1,6 +1,6 @@
 const std = @import("std");
 pub const c = @cImport({
-    @cInclude("libpq-fe.h");
+    @cInclude("postgresql/libpq-fe.h");
 });
 
 pub const Db = struct {
