@@ -10,6 +10,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    const target_os = target.result.os.tag;
+    if (target_os == .macos) {
+        mod.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+        mod.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
+    } else {
+        mod.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
+    }
     mod.linkSystemLibrary("pq", .{});
 
     const exe = b.addExecutable(.{

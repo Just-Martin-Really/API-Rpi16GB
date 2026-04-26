@@ -10,6 +10,7 @@ const WorkerArgs = struct {
     allocator: std.mem.Allocator,
     write_connstr: [*:0]const u8,
     read_connstr: [*:0]const u8,
+    jwt_secret: []const u8,
 };
 
 pub fn run(
@@ -18,6 +19,7 @@ pub fn run(
     port: u16,
     write_connstr: [*:0]const u8,
     read_connstr: [*:0]const u8,
+    jwt_secret: []const u8,
 ) !void {
     const address = try net.IpAddress.parse("0.0.0.0", port);
     var listener = try address.listen(io, .{ .reuse_address = true });
@@ -36,6 +38,7 @@ pub fn run(
             .allocator = allocator,
             .write_connstr = write_connstr,
             .read_connstr = read_connstr,
+            .jwt_secret = jwt_secret,
         };
         const t = std.Thread.spawn(.{}, connectionWorker, .{args}) catch |err| {
             std.log.err("thread spawn failed: {}", .{err});
@@ -77,7 +80,7 @@ fn handleConnection(args: WorkerArgs) !void {
             error.HttpConnectionClosing => return,
             else => return err,
         };
-        router.dispatch(&request, arena.allocator(), &read_db, &write_db) catch |err| {
+        router.dispatch(&request, arena.allocator(), &read_db, &write_db, args.jwt_secret) catch |err| {
             std.log.err("handler error: {}", .{err});
             return err;
         };

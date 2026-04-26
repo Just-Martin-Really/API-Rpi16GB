@@ -24,8 +24,10 @@ pub fn main() !void {
 
     var write_pw_buf: [256]u8 = undefined;
     var read_pw_buf: [256]u8 = undefined;
+    var jwt_secret_buf: [256]u8 = undefined;
     const write_pw = try readSecret("/run/secrets/db_write_password", &write_pw_buf);
     const read_pw = try readSecret("/run/secrets/db_read_password", &read_pw_buf);
+    const jwt_secret = try readSecret("/run/secrets/jwt_secret", &jwt_secret_buf);
 
     var write_connstr_buf: [512]u8 = undefined;
     var read_connstr_buf: [512]u8 = undefined;
@@ -37,5 +39,5 @@ pub fn main() !void {
     const port: u16 = 8080;
     std.log.info("starting backend on :{d}", .{port});
 
-    try server.run(io, allocator, port, write_connstr, read_connstr);
+    try server.run(io, allocator, port, write_connstr, read_connstr, jwt_secret);
 }
