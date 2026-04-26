@@ -350,12 +350,3 @@ CREATE TABLE dashboard_users (
     password_sha256 CHAR(64)     NOT NULL
 );
 ```
-
----
-
-## Was noch fehlt / was ich als nächstes mache
-
-- Die neu erstellten Dateien (`src/auth.zig`, `src/handlers/login.zig`, `src/handlers/actuator.zig`, `docker/controller/`, `docker/mosquitto/`, `docker/setup_tls.sh`) sind noch nicht committed
-- End-to-End-Test auf dem echten Pi: Pico schickt MQTT → controller.py schreibt in DB → API liefert die Daten zurück
-- Frontend/Dashboard existiert noch nicht — `dashboard_users` ist schon in der DB, aber es gibt noch keine Web-Oberfläche, die die Sensordaten anzeigt
-- Die Verbindung zwischen WLAN-AP und Backend-Pi ist noch nicht final getestet (hängt auch vom AP-Repo ab)
