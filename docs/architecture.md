@@ -35,6 +35,23 @@ host (RPi 5 16 GB)
 
 ## Security Principles Applied
 
+### Fail-Secure Defaults
+- nginx returns 502 if the backend container is down — requests are never passed through to an unprotected fallback
+- JWT validation returns 401 on any failure (missing header, invalid signature, expired token) — there is no code path that allows a request through on error
+- MQTT broker rejects the connection outright on failed authentication — no anonymous fallback
+- If a DB query fails during a request, the handler returns an error response — never partial or empty data silently treated as success
+
+### Defence in Depth
+Security is enforced at multiple independent layers, so a failure or bypass of any single layer does not compromise the system:
+1. nftables on the WLAN-AP — only Production WLAN traffic enters the network at all
+2. nginx subnet whitelist + rate limiting — further restricts which hosts can reach which paths
+3. JWT validation on every `/api/` endpoint — authentication is re-checked per request, not per session
+4. DB users with minimal rights — even full compromise of the backend process cannot DROP, ALTER, or access tables outside the granted scope
+5. Docker network isolation — sensor-side containers have no route to postgres
+6. MQTT ACL — a compromised sensor credential cannot read other sensors' data or write to actuator topics
+
+
+
 ### Least Common Mechanism
 - Each container runs in its own isolated network segment.
 - Two separate DB users (`iot_write_user`, `iot_read_user`) with distinct permissions.

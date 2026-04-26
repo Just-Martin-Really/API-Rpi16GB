@@ -113,6 +113,21 @@ controller.py (pollt alle 2s) → MQTT publish actuator01/data → mosquitto →
 
 ### Sicherheitsprinzipien
 
+**Fail-Secure Defaults:**
+- nginx gibt 502 zurück wenn der Backend-Container down ist — kein unsicherer Fallback
+- JWT-Validierung gibt bei jedem Fehler (fehlendes Header, falsche Signatur, abgelaufen) 401 zurück — kein Code-Pfad lässt eine Anfrage bei Fehler durch
+- MQTT-Broker lehnt die Verbindung bei fehlgeschlagener Auth komplett ab
+- DB-Fehler in einem Handler → Fehlerantwort, nie stille Teildaten
+
+**Defence in Depth:**
+Sicherheit wird auf mehreren unabhängigen Ebenen durchgesetzt — eine umgangene Schicht reicht nicht aus:
+1. nftables auf dem WLAN-AP — nur Production-WLAN-Traffic kommt überhaupt ins Netz
+2. nginx Subnet-Whitelist + Rate Limiting — schränkt weiter ein, welche Hosts welche Pfade erreichen
+3. JWT-Validierung auf jedem `/api/`-Endpunkt — pro Request, nicht pro Session
+4. DB-User mit minimalen Rechten — selbst bei vollständiger Kompromittierung des Backend-Prozesses kein DROP/ALTER möglich
+5. Docker-Netzwerk-Isolation — Sensor-seitige Container haben keine Route zu postgres
+6. MQTT-ACL — kompromittierte Sensor-Credentials können keine anderen Sensor-Daten lesen oder Aktor-Topics beschreiben
+
 **Least Privilege:**
 - `iot_write_user`: nur `INSERT`/`SELECT` auf `sensor_data` und `actuator_commands`
 - `iot_read_user`: nur `SELECT` auf `sensor_data` und `dashboard_users`
