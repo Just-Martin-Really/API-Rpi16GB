@@ -22,14 +22,16 @@ host (RPi 5 16 GB)
 ├── app-net (172.20.0.0/24)
 │   ├── nginx      — reverse proxy, sole entry point from WLAN
 │   ├── backend    — Zig HTTP server, business logic
-│   └── postgres   — PostgreSQL, not exposed to host
+│   ├── postgres   — PostgreSQL, not exposed to host
+│   ├── mosquitto  — also on app-net so controller can reach it
+│   └── controller — MQTT→DB bridge, also on app-net to reach postgres
 │
-└── sensor-net (172.21.0.0/24)  [reserved, not yet deployed]
-    ├── mosquitto  — MQTT broker, TLS, per-sensor ACL
-    └── controller — bridges MQTT → backend API
+└── sensor-net (172.21.0.0/24)
+    ├── mosquitto  — exposed on port 8883 to the Production WLAN
+    └── controller — subscribes to sensor topics, publishes actuator topics
 ```
 
-Containers on `sensor-net` cannot reach `postgres` directly; they must go through the backend API on `app-net`.
+`mosquitto` and `controller` are on both networks. `postgres` is only on `app-net` — the MCU and any sensor-side traffic can never reach it directly.
 
 ## Security Principles Applied
 
@@ -44,33 +46,53 @@ Containers on `sensor-net` cannot reach `postgres` directly; they must go throug
 - JWT tokens validate every HTTP request to authenticated endpoints.
 
 ### Least Privilege
-- `iot_write_user`: `SELECT`, `INSERT`, `UPDATE` on `sensor_data` only.
-- `iot_read_user`: `SELECT` on `sensor_data` only.
+- `iot_write_user`: `SELECT`, `INSERT`, `UPDATE` on `sensor_data`; `INSERT`, `SELECT` on `actuator_commands` only.
+- `iot_read_user`: `SELECT` on `sensor_data` and `dashboard_users` only.
+- MQTT: `sensor01` can only publish to `sensor01/data`. `controller` can only read `sensor+/data` and write `actuator+/data`.
 - No container runs as root. No container has `--privileged`.
-- nginx only forwards `/health` and `/api/` — all other paths are dropped.
+- nginx forwards only `/health`, `/auth/`, and `/api/` — all other paths are dropped.
 
 ## Data Flow
 
 ```
-Pico sensor
-  │  MQTT/TLS  (sensor-net)
+Sensor reading
+──────────────
+Pico (sensor01)
+  │  MQTT/TLS on sensor01/data  (sensor-net, port 8883)
   ▼
-mosquitto
-  │  internal HTTP
+mosquitto  [ACL: sensor01 write-only to sensor01/data]
+  │  MQTT/TLS subscription
   ▼
-controller
-  │  POST /api/v1/sensor-data  (app-net)
-  ▼
-backend (Zig)
-  │  libpq / iot_write_user
+controller.py
+  │  INSERT INTO sensor_data  (app-net, iot_write_user)
   ▼
 postgres.sensor_data
 
-Dashboard / browser
+Dashboard read
+──────────────
+Browser
   │  HTTPS → nginx → GET /api/v1/sensor-data  (app-net)
   ▼
-backend (Zig)
-  │  libpq / iot_read_user
+backend (Zig)  [JWT validated]
+  │  SELECT  (iot_read_user)
   ▼
 postgres.sensor_data
+
+Actuator command
+────────────────
+Browser
+  │  HTTPS → nginx → POST /auth/login → JWT
+  │  HTTPS → nginx → POST /api/v1/actuator-command  (app-net)
+  ▼
+backend (Zig)  [JWT validated]
+  │  INSERT INTO actuator_commands  (iot_write_user)
+  ▼
+postgres.actuator_commands
+  │  polled every 2s by controller.py
+  ▼
+controller.py
+  │  MQTT publish to actuator01/data  (sensor-net)
+  │  UPDATE actuator_commands SET sent_at = NOW()
+  ▼
+mosquitto → Pico (actuator01)
 ```

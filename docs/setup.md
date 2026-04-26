@@ -87,39 +87,44 @@ git clone https://github.com/Just-Martin-Really/API-Rpi16GB.git ~/API-Rpi16GB
 
 ### 1.8 Create Secrets
 
-Passwords are never stored in the repo. Generate them on the Pi and store locally:
+Passwords are never stored in the repo. Generate them on the Pi and store in `docker/secrets/` (gitignored):
 
 ```sh
 mkdir -p ~/API-Rpi16GB/docker/secrets
 chmod 700 ~/API-Rpi16GB/docker/secrets
 
-# Generate passwords
-openssl rand -base64 24  # → postgres superuser
-openssl rand -base64 24  # → iot_write_user
-openssl rand -base64 24  # → iot_read_user
+# DB passwords
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_password.txt
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_write_password.txt
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_read_password.txt
 
-echo "<superuser_password>" > ~/API-Rpi16GB/docker/secrets/db_password.txt
-echo "<write_password>"     > ~/API-Rpi16GB/docker/secrets/db_write_password.txt
-echo "<read_password>"      > ~/API-Rpi16GB/docker/secrets/db_read_password.txt
+# JWT signing key
+echo "$(openssl rand -base64 48)" > ~/API-Rpi16GB/docker/secrets/jwt_secret.txt
+
+# MQTT controller credentials
+echo "controller"                 > ~/API-Rpi16GB/docker/secrets/mqtt_controller_user.txt
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/mqtt_controller_password.txt
 
 chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 ```
 
-### 1.9 Provision TLS Certificate
+The CA cert (`ca_cert.txt`) is written automatically by `setup_tls.sh` in the next step.
 
-nginx expects a certificate and key at `/etc/ssl/backend/` on the Pi host. For testing, generate a self-signed one:
+### 1.9 Provision TLS Certificates
+
+Run the TLS setup script. It creates a local CA, signs a cert for nginx (`backend.lab.local`) and a cert for the MQTT broker, and drops the CA cert into `docker/secrets/` for the controller container.
 
 ```sh
-sudo mkdir -p /etc/ssl/backend
-sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout /etc/ssl/backend/backend.key \
-  -out /etc/ssl/backend/backend.crt \
-  -subj "/CN=backend-server"
+cd ~/API-Rpi16GB
+sudo sh docker/setup_tls.sh
 ```
 
-For production, copy the certificate issued by the project CA from the WLAN-AP.
+Output:
+- `/etc/ssl/backend/backend.crt` and `backend.key` — mounted by nginx
+- `docker/mosquitto/ssl/broker.crt`, `broker.key`, `ca.crt` — mounted by mosquitto
+- `docker/secrets/ca_cert.txt` — mounted into the controller container for TLS verification
 
-> Note: run openssl as a single line — the backslash continuation only works in bash, not all shells.
+Copy the CA cert to the Pico and to any client browser that will connect to the dashboard so they trust the self-signed CA.
 
 ### 1.10 Host Firewall (iptables)
 
@@ -143,11 +148,13 @@ docker compose up --build -d
 
 The first run takes several minutes — Docker downloads Zig 0.16.0 (~90 MB), compiles the backend, and pulls postgres and nginx. Subsequent runs use the layer cache and are much faster.
 
-After the first start, set DB user passwords:
+After the first start, set DB and MQTT passwords:
 
 ```sh
 sh set_passwords.sh
 ```
+
+This sets the DB user passwords via `psql`, generates the mosquitto `passwd` file from the MQTT secrets, and restarts the controller.
 
 Check status:
 
@@ -220,7 +227,10 @@ make run
 | `std.fs.cwd()` | removed — same workaround as above |
 | `std.mem.trimRight(T, slice, chars)` | removed — inline the loop |
 | `std.ArrayList(T).init(allocator)` | removed — use a heap-allocated fixed buffer or `ArrayListUnmanaged` |
-| `@cInclude("libpq-fe.h")` | use `@cInclude("postgresql/libpq-fe.h")` on Debian (no pkg-config in container) |
+| `@cInclude("postgresql/libpq-fe.h")` | use `@cInclude("libpq-fe.h")` — include path set per-platform in `build.zig` |
+| `std.time.timestamp()` | removed — use C `time(null)` via `@cImport(@cInclude("time.h"))` |
+| `std.base64.Base64Encoder.init(alphabet, pad)` | `alphabet` must be `[64]u8` not `*const [64:0]u8` — dereference with `.*` |
+| `request.head.headers.getFirstValue(name)` | removed — iterate with `request.iterateHeaders()` |
 
 Networking now requires a `std.Io.Threaded` instance — create it in `main` and pass `io` down to anything that does network I/O.
 

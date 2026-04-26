@@ -2,7 +2,33 @@
 
 Base URL: `https://backend-server.local`
 
-All endpoints return `application/json`. All non-health endpoints require a valid JWT in the `Authorization: Bearer <token>` header (to be implemented).
+All endpoints return `application/json`. All `/api/` endpoints require a valid JWT in the `Authorization: Bearer <token>` header — obtain one via `POST /auth/login`.
+
+---
+
+## POST /auth/login
+
+Authenticates a dashboard user and returns a JWT. No `Authorization` header required.
+
+**Request body**
+```json
+{
+  "username": "admin",
+  "password": "changeme"
+}
+```
+
+**Response 200**
+```json
+{"token": "<jwt>"}
+```
+
+The token is valid for 24 hours. Include it in subsequent requests as `Authorization: Bearer <token>`.
+
+**Response 401**
+```json
+{"error": "unauthorized"}
+```
 
 ---
 
@@ -67,6 +93,35 @@ Inserts a new sensor reading. Used by the controller service (not directly by th
 
 ---
 
+## POST /api/v1/actuator-command
+
+Queues a command for an actuator. The controller service picks it up within ~2 seconds and publishes it to the actuator's MQTT topic (`<actuator_id>/data`).
+
+**Request body**
+```json
+{
+  "actuator_id": "actuator01",
+  "command": "on"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `actuator_id` | string | yes | max 64 chars, must match a known actuator |
+| `command` | string | yes | max 64 chars, e.g. `"on"`, `"off"` |
+
+**Response 201**
+```json
+{"queued": true}
+```
+
+**Response 400** — missing or invalid fields
+```json
+{"error": "invalid json"}
+```
+
+---
+
 ## Database Schema
 
 ```sql
@@ -76,5 +131,13 @@ CREATE TABLE sensor_data (
     value       DOUBLE PRECISION NOT NULL,
     unit        VARCHAR(16)      NOT NULL,
     recorded_at TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE actuator_commands (
+    id          BIGSERIAL    PRIMARY KEY,
+    actuator_id VARCHAR(64)  NOT NULL,
+    command     VARCHAR(64)  NOT NULL,
+    issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    sent_at     TIMESTAMPTZ           -- NULL until the controller dispatches it
 );
 ```
