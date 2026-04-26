@@ -14,6 +14,14 @@ secrets:
     file: ./secrets/db_write_password.txt
   db_read_password:
     file: ./secrets/db_read_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  mqtt_controller_user:
+    file: ./secrets/mqtt_controller_user.txt
+  mqtt_controller_password:
+    file: ./secrets/mqtt_controller_password.txt
+  ca_cert:
+    file: ./secrets/ca_cert.txt
 
 services:
 
@@ -47,6 +55,9 @@ services:
     secrets:
       - db_write_password
       - db_read_password
+      - jwt_secret
+      - dashboard_user
+      - dashboard_password
     networks:
       - app-net
     depends_on:
@@ -69,14 +80,40 @@ services:
     depends_on:
       - backend
 
-  # ── MQTT broker (sensor-net) ───────────────────────────────────────────────
-  # Uncomment when sensor integration is ready.
-  # mosquitto:
-  #   image: eclipse-mosquitto:2
-  #   restart: unless-stopped
-  #   volumes:
-  #     - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-  #     - ./mosquitto/passwd:/mosquitto/config/passwd:ro
-  #   networks:
-  #     - sensor-net
-  #     - app-net
+  # ── MQTT broker ────────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./mosquitto/ssl:/mosquitto/ssl:ro
+    networks:
+      - sensor-net
+      - app-net
+
+  # ── Controller (MQTT → DB bridge) ─────────────────────────────────────────
+  controller:
+    build:
+      context: controller
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "8883"
+      DB_HOST: postgres
+      DB_NAME: sensor
+    secrets:
+      - db_write_password
+      - mqtt_controller_user
+      - mqtt_controller_password
+      - ca_cert
+    networks:
+      - app-net
+      - sensor-net
+    depends_on:
+      - postgres
+      - mosquitto

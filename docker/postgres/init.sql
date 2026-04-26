@@ -26,3 +26,34 @@ CREATE USER iot_read_user;
 GRANT CONNECT ON DATABASE sensor TO iot_read_user;
 GRANT USAGE  ON SCHEMA public TO iot_read_user;
 GRANT SELECT ON TABLE sensor_data TO iot_read_user;
+
+-- Dashboard users table (login credentials for the web dashboard)
+CREATE TABLE IF NOT EXISTS dashboard_users (
+    id              SERIAL       PRIMARY KEY,
+    username        VARCHAR(64)  UNIQUE NOT NULL,
+    password_sha256 CHAR(64)     NOT NULL
+);
+
+-- Default admin user. Password is 'changeme' — update via SQL before going live:
+-- UPDATE dashboard_users SET password_sha256 = encode(sha256('newpassword'::bytea), 'hex') WHERE username = 'admin';
+INSERT INTO dashboard_users (username, password_sha256)
+VALUES ('admin', encode(sha256('changeme'::bytea), 'hex'))
+ON CONFLICT DO NOTHING;
+
+GRANT SELECT ON TABLE dashboard_users TO iot_read_user;
+
+-- Actuator commands written by the dashboard, consumed by controller.py
+CREATE TABLE IF NOT EXISTS actuator_commands (
+    id          BIGSERIAL    PRIMARY KEY,
+    actuator_id VARCHAR(64)  NOT NULL,
+    command     VARCHAR(64)  NOT NULL,
+    issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    sent_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
+    ON actuator_commands (issued_at)
+    WHERE sent_at IS NULL;
+
+GRANT INSERT, SELECT ON TABLE actuator_commands TO iot_write_user;
+GRANT USAGE, SELECT ON SEQUENCE actuator_commands_id_seq TO iot_write_user;

@@ -1,0 +1,8 @@
+# sensor01: write-only to its own data topic
+user sensor01
+topic write sensor01/data
+
+# controller: read all sensor topics, write all actuator topics
+user controller
+topic read sensor+/data
+topic write actuator+/data
