@@ -18,8 +18,8 @@ docker compose exec postgres psql -U postgres -d sensor \
 
 echo "==> Generating MQTT passwd file"
 # -c creates a fresh file with the first user; -b appends without prompting
-docker compose exec mosquitto mosquitto_passwd -c -b /mosquitto/config/passwd sensor01 "$MQTT_SENSOR01_PASS"
-docker compose exec mosquitto mosquitto_passwd -b /mosquitto/config/passwd "$MQTT_CTRL_USER" "$MQTT_CTRL_PASS"
+docker compose exec -u root mosquitto mosquitto_passwd -c -b /mosquitto/config/passwd sensor01 "$MQTT_SENSOR01_PASS"
+docker compose exec -u root mosquitto mosquitto_passwd -b /mosquitto/config/passwd "$MQTT_CTRL_USER" "$MQTT_CTRL_PASS"
 
 echo "==> Restarting broker and controller"
 docker compose restart mosquitto controller
