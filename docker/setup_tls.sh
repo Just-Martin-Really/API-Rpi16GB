@@ -28,11 +28,14 @@ openssl req -new \
     -key "$NGINX_DIR/backend.key" \
     -subj "/CN=$DOMAIN/O=DHBW/C=DE" \
     -out "$NGINX_DIR/backend.csr"
+NGINX_EXT=$(mktemp)
+printf "subjectAltName=DNS:%s,DNS:localhost,IP:192.168.50.30" "$DOMAIN" > "$NGINX_EXT"
 openssl x509 -req -in "$NGINX_DIR/backend.csr" \
     -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
     -out "$NGINX_DIR/backend.crt" \
     -days 825 -sha256 \
-    -extfile <(printf "subjectAltName=DNS:%s,DNS:localhost,IP:192.168.50.30" "$DOMAIN")
+    -extfile "$NGINX_EXT"
+rm -f "$NGINX_EXT"
 
 echo "==> Generating MQTT broker cert"
 openssl genrsa -out "$MQTT_DIR/broker.key" 2048
@@ -40,11 +43,15 @@ openssl req -new \
     -key "$MQTT_DIR/broker.key" \
     -subj "/CN=mosquitto/O=DHBW/C=DE" \
     -out "$MQTT_DIR/broker.csr"
+MQTT_EXT=$(mktemp)
+printf "subjectAltName=DNS:mosquitto,DNS:localhost,DNS:backend-server,DNS:backend-server.lab.local" > "$MQTT_EXT"
 openssl x509 -req -in "$MQTT_DIR/broker.csr" \
     -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
     -out "$MQTT_DIR/broker.crt" \
     -days 825 -sha256 \
-    -extfile <(printf "subjectAltName=DNS:mosquitto,DNS:localhost,DNS:backend-server,DNS:backend-server.lab.local")
+    -extfile "$MQTT_EXT"
+rm -f "$MQTT_EXT"
+
 cp "$CA_DIR/ca.crt" "$MQTT_DIR/ca.crt"
 
 echo "==> Copying CA cert to Docker secrets dir"
