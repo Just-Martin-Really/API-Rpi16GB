@@ -105,6 +105,11 @@ echo "$(openssl rand -base64 48)" > ~/API-Rpi16GB/docker/secrets/jwt_secret.txt
 echo "controller"                 > ~/API-Rpi16GB/docker/secrets/mqtt_controller_user.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/mqtt_controller_password.txt
 
+# MQTT sensor01 credentials — copy this password into the Pico's main.py
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/mqtt_sensor01_password.txt
+echo "Sensor01 MQTT password (put this in the Pico's MQTT_PW):"
+cat ~/API-Rpi16GB/docker/secrets/mqtt_sensor01_password.txt
+
 chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 ```
 

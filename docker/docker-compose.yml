@@ -56,8 +56,6 @@ services:
       - db_write_password
       - db_read_password
       - jwt_secret
-      - dashboard_user
-      - dashboard_password
     networks:
       - app-net
     depends_on:
@@ -89,7 +87,7 @@ services:
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/acl:/mosquitto/config/acl:ro
-      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:rw
       - ./mosquitto/ssl:/mosquitto/ssl:ro
     networks:
       - sensor-net

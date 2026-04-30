@@ -44,7 +44,7 @@ openssl x509 -req -in "$MQTT_DIR/broker.csr" \
     -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
     -out "$MQTT_DIR/broker.crt" \
     -days 825 -sha256 \
-    -extfile <(printf "subjectAltName=DNS:mosquitto,DNS:localhost")
+    -extfile <(printf "subjectAltName=DNS:mosquitto,DNS:localhost,DNS:backend-server,DNS:backend-server.lab.local")
 cp "$CA_DIR/ca.crt" "$MQTT_DIR/ca.crt"
 
 echo "==> Copying CA cert to Docker secrets dir"
