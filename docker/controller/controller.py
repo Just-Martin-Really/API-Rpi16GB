@@ -25,7 +25,7 @@ def db_connect():
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print("Connected to broker", flush=True)
-        client.subscribe("sensor+/data")
+        client.subscribe("sensor01/data")
     else:
         print(f"Broker connection failed: rc={rc}", flush=True)
 
