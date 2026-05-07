@@ -93,6 +93,22 @@ services:
       - sensor-net
       - app-net
 
+  # ── Archiver (sensor_data → sensor_data_archive, daily) ───────────────────
+  archiver:
+    build:
+      context: archiver
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_NAME: sensor
+    secrets:
+      - db_write_password
+    networks:
+      - app-net
+    depends_on:
+      - postgres
+
   # ── Controller (MQTT → DB bridge) ─────────────────────────────────────────
   controller:
     build:
