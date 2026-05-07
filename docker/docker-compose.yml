@@ -109,6 +109,24 @@ services:
     depends_on:
       - postgres
 
+  # ── Seeder (fake-data generator, on-demand only) ──────────────────────────
+  # Not started by `docker compose up` — opt-in via the "tools" profile:
+  #   docker compose --profile tools run --rm seeder --rows 10000 --days 30
+  seeder:
+    build:
+      context: seeder
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+    environment:
+      DB_HOST: postgres
+      DB_NAME: sensor
+    secrets:
+      - db_write_password
+    networks:
+      - app-net
+    depends_on:
+      - postgres
+
   # ── Controller (MQTT → DB bridge) ─────────────────────────────────────────
   controller:
     build:
