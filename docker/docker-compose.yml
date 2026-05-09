@@ -16,6 +16,8 @@ secrets:
     file: ./secrets/db_read_password.txt
   jwt_secret:
     file: ./secrets/jwt_secret.txt
+  api_password:
+    file: ./secrets/api_password.txt
   mqtt_controller_user:
     file: ./secrets/mqtt_controller_user.txt
   mqtt_controller_password:
@@ -136,10 +138,10 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
-      DB_HOST: postgres
-      DB_NAME: sensor
+      API_BASE_URL: https://nginx
+      API_USERNAME: admin
     secrets:
-      - db_write_password
+      - api_password
       - mqtt_controller_user
       - mqtt_controller_password
       - ca_cert
@@ -147,5 +149,5 @@ services:
       - app-net
       - sensor-net
     depends_on:
-      - postgres
+      - nginx
       - mosquitto
