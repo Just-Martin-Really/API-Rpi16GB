@@ -45,12 +45,6 @@ def api_post(path, payload, token=None):
         return json.loads(body)
 
 
-    with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
-        body = response.read().decode("utf-8")
-        if not body:
-            return {}
-
-
 def login():
     global TOKEN
 
