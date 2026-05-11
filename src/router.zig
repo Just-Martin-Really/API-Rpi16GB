@@ -60,6 +60,14 @@ pub fn dispatch(
         if (std.mem.eql(u8, target, "/api/v1/actuator-command") and method == .POST) {
             return actuator.create(request, allocator, write_db);
         }
+
+        if (std.mem.eql(u8, target, "/api/v1/actuator-commands/mark-sent") and method == .POST) {
+            return actuator.markSent(request, allocator, write_db);
+        }
+
+        if (std.mem.startsWith(u8, target, "/api/v1/actuator-commands") and method == .GET) {
+            return actuator.listUnsent(request, allocator, write_db);
+        }
     }
 
     return notFound(request);

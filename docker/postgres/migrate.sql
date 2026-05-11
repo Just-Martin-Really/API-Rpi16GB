@@ -17,3 +17,12 @@ CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON sensor_data_archive (archi
 GRANT DELETE ON TABLE sensor_data TO iot_write_user;
 GRANT SELECT, INSERT, DELETE ON TABLE sensor_data_archive TO iot_write_user;
 GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
+
+-- Controller needs UPDATE on actuator_commands to mark dispatched rows.
+GRANT UPDATE ON TABLE actuator_commands TO iot_write_user;
+
+-- Service account for the MQTT controller. Password must match secrets/api_password.txt
+-- and be updated via the same UPDATE pattern as the admin user.
+INSERT INTO dashboard_users (username, password_sha256)
+VALUES ('controller_service', encode(sha256('changeme'::bytea), 'hex'))
+ON CONFLICT DO NOTHING;

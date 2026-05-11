@@ -1,8 +1,14 @@
 networks:
   app-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
   sensor-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
 
 volumes:
   postgres_data:
@@ -139,7 +145,7 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
       API_BASE_URL: https://nginx
-      API_USERNAME: admin
+      API_USERNAME: controller_service
     secrets:
       - api_password
       - mqtt_controller_user

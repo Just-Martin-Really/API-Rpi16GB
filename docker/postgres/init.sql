@@ -34,10 +34,15 @@ CREATE TABLE IF NOT EXISTS dashboard_users (
     password_sha256 CHAR(64)     NOT NULL
 );
 
--- Default admin user. Password is 'changeme' — update via SQL before going live:
+-- Default admin user. Password is 'changeme', update via SQL before going live:
 -- UPDATE dashboard_users SET password_sha256 = encode(sha256('newpassword'::bytea), 'hex') WHERE username = 'admin';
 INSERT INTO dashboard_users (username, password_sha256)
 VALUES ('admin', encode(sha256('changeme'::bytea), 'hex'))
+ON CONFLICT DO NOTHING;
+
+-- Service account for the MQTT controller. Password must match secrets/api_password.txt.
+INSERT INTO dashboard_users (username, password_sha256)
+VALUES ('controller_service', encode(sha256('changeme'::bytea), 'hex'))
 ON CONFLICT DO NOTHING;
 
 GRANT SELECT ON TABLE dashboard_users TO iot_read_user;
@@ -55,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
     ON actuator_commands (issued_at)
     WHERE sent_at IS NULL;
 
-GRANT INSERT, SELECT ON TABLE actuator_commands TO iot_write_user;
+GRANT INSERT, SELECT, UPDATE ON TABLE actuator_commands TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE actuator_commands_id_seq TO iot_write_user;
 
 -- Archive table: rows older than 7 days are moved here; purged after 3 years

@@ -57,7 +57,7 @@ def classify(sensor_id: str) -> tuple[str, float, float, float]:
     """Return (unit, normal_mean, normal_stddev, anomaly_value) for a sensor ID."""
     name = sensor_id.lower()
     if "temp" in name:
-        return ("°C", 22.0, 1.2, 40.0)
+        return ("C", 22.0, 1.2, 40.0)
     if "humid" in name:
         return ("%", 45.0, 4.0, 95.0)
     return ("u", 50.0, 10.0, 100.0)
