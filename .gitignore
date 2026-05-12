@@ -17,3 +17,8 @@ docker/secrets/
 
 # OS
 .DS_Store
+
+# Zensical build output and synced external docs
+site/
+docs/pico/
+docs/router/
