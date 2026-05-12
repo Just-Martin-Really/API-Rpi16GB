@@ -9,11 +9,16 @@ docker/secrets/
 # Environment overrides
 .env
 .env.local
+.env.*.local
 
 # Editor
 .idea/
 .vscode/
+.claude/
 *.swp
+
+# Python
+__pycache__/
 
 # OS
 .DS_Store
