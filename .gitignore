@@ -9,14 +9,24 @@ docker/secrets/
 # Environment overrides
 .env
 .env.local
+.env.*.local
 
 # Editor
 .idea/
 .vscode/
+.claude/
 *.swp
+
+# Python
+__pycache__/
 
 # OS
 .DS_Store
 
 # Node modules (can be reinstalled with npm ci)
 docker/webserver/node_modules/
+
+# Zensical build output and synced external docs
+site/
+docs/pico/
+docs/router/

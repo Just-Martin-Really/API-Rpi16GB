@@ -20,7 +20,7 @@ Two isolated bridge networks enforce least-privilege between container groups.
 host (RPi 5 16 GB)
 │
 ├── app-net (172.20.0.0/24)
-│   ├── nginx — reverse proxy, sole HTTPS entry point from WLAN and controller
+│   ├── nginx — reverse proxy + ModSecurity WAF (OWASP CRS), sole HTTPS entry point from WLAN and controller
 │   ├── backend — Zig HTTP server, business logic, database access
 │   ├── postgres — PostgreSQL, not exposed to host
 │   ├── mosquitto — also on app-net for internal service communication
@@ -49,10 +49,11 @@ This keeps database access centralized in the backend and prevents the MQTT/cont
 Security is enforced at multiple independent layers, so a failure or bypass of any single layer does not compromise the system:
 1. nftables on the WLAN-AP — only Production WLAN traffic enters the network at all
 2. nginx subnet whitelist + rate limiting — further restricts which hosts can reach which paths
-3. JWT validation on every `/api/` endpoint — authentication is re-checked per request, not per session
-4. DB users with minimal rights — even full compromise of the backend process cannot DROP, ALTER, or access tables outside the granted scope
-5. Docker network isolation — sensor-side traffic has no route to postgres; sensor data reaches the database only through controller → nginx → backend
-6. MQTT ACL — a compromised sensor credential cannot read other sensors' data or write to actuator topics
+3. ModSecurity WAF with OWASP Core Rule Set — every request is inspected at HTTP Layer 7 for SQLi, XSS, RCE, and path-traversal patterns before nginx hands off to the backend
+4. JWT validation on every `/api/` endpoint — authentication is re-checked per request, not per session
+5. DB users with minimal rights — even full compromise of the backend process cannot DROP, ALTER, or access tables outside the granted scope
+6. Docker network isolation — sensor-side traffic has no route to postgres; sensor data reaches the database only through controller → nginx → backend
+7. MQTT ACL — a compromised sensor credential cannot read other sensors' data or write to actuator topics
 
 
 
@@ -73,6 +74,24 @@ Security is enforced at multiple independent layers, so a failure or bypass of a
 - The controller does not receive database credentials. It only receives MQTT credentials and API credentials.
 - Containers are designed to avoid unnecessary privileges and do not use `--privileged`.
 - nginx forwards only `/health`, `/auth/`, and `/api/` — all other paths are dropped.
+
+## Web Application Firewall (Kap4 4.2)
+
+nginx is built on the `owasp/modsecurity-crs:nginx-alpine` image, which bundles libmodsecurity 3, the ModSecurity-nginx connector, and the OWASP Core Rule Set. Every request that survives the TLS handshake and the subnet allowlist is inspected by ModSecurity before it can reach the backend.
+
+**Configuration source of truth**: `docker/nginx/templates/conf.d/default.conf.template` (server block, `modsecurity on;`) and `docker/nginx/modsec/` (include chain, custom rule, exclusions).
+
+**Engine mode**: `DetectionOnly` on first deploy. CRS matches are logged but requests are not blocked. The mode is flipped to `On` only after the audit log shows no false positives on legitimate traffic. Controlled by `MODSEC_RULE_ENGINE` on the nginx service.
+
+**Paranoia level**: 1 (CRS default). Higher levels add stricter heuristics but require more exclusions for a JSON API.
+
+**Audit log**: written to container stdout as JSON. Read with `docker logs nginx`, parse with `docker logs nginx | jq 'select(.transaction)'`.
+
+**Custom rule**: `docker/nginx/modsec/custom-rules.conf` contains the Kap4 slide 4-19 demonstration rule (`id:1000`) that denies any request whose URI contains `<script>`.
+
+**False-positive exclusions**: live in `docker/nginx/modsec/exclusions.conf`. Each entry must cite the CRS rule ID it disables and the legitimate request that triggered it.
+
+**Path note**: Kap4 slide 4-17 prescribes config paths under `/etc/nginx/modsecurity/`. The OWASP-maintained image places the same files under `/etc/modsecurity.d/`. The directives, rule set, and audit-log format all match the slide; only the in-container filesystem layout differs.
 
 ## Data Flow
 ### Sensor ingestion

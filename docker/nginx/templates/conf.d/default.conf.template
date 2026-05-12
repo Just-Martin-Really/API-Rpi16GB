@@ -1,0 +1,57 @@
+# Kap4 4.2: Reverse Proxy with ModSecurity WAF + OWASP CRS.
+# Replaces the OWASP CRS image's default template. Variables in ${...}
+# are filled by envsubst at container start from the nginx service env.
+
+# Rate limit: 30 req/min per client IP (http-scope zone)
+limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
+
+server {
+    listen ${PORT} default_server;
+    server_name ${SERVER_NAME};
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen ${SSL_PORT} ssl;
+    server_name ${SERVER_NAME};
+
+    ssl_certificate     ${SSL_CERT_FILE};
+    ssl_certificate_key ${SSL_CERT_KEY_FILE};
+    ssl_protocols       ${SSL_PROTOCOLS};
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # ModSecurity: loads image base config + OWASP CRS + custom rules + FP exclusions.
+    modsecurity on;
+    modsecurity_rules_file /etc/nginx/modsec/main.conf;
+
+    # Subnet allowlist: Production WLAN + internal Docker bridge networks.
+    allow 192.168.50.0/24;
+    allow 172.16.0.0/12;
+    deny  all;
+
+    location /health {
+        proxy_pass http://backend:8080;
+        proxy_set_header Host $host;
+    }
+
+    location /auth/ {
+        limit_req zone=api burst=5 nodelay;
+        proxy_pass http://backend:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api/internal/ {
+        limit_req zone=api burst=10 nodelay;
+        proxy_pass http://webserver:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api/ {
+        limit_req zone=api burst=10 nodelay;
+        proxy_pass http://backend:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
