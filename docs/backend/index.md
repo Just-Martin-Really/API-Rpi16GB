@@ -182,7 +182,7 @@ cd ~/API-Rpi16GB/docker
 docker compose up --build -d
 ```
 
-Docker downloads Zig, compiles the backend, and starts all services. See [docs/backend/setup.md](docs/backend/setup.md) for the full first-time setup and background notes.
+Docker downloads Zig, compiles the backend, and starts all services. See [docs/setup.md](docs/setup.md) for the full first-time setup and background notes.
 
 ### First-time setup notes
 Before first start on the Pi:
