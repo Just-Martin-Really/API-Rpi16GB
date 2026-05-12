@@ -1,9 +1,9 @@
 import json
 import os
 import ssl
-import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
@@ -12,10 +12,10 @@ MQTT_USER = open("/run/secrets/mqtt_controller_user").read().strip()
 MQTT_PASS = open("/run/secrets/mqtt_controller_password").read().strip()
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://nginx")
-API_USERNAME = os.environ.get("API_USERNAME", "admin")
-API_PASSWORD = open("/run/secrets/api_password").read().strip()
+API_KEY = open("/run/secrets/api_key").read().strip()
 
-TOKEN = None
+# Buffer until both measurement values for a round are available.
+pending = {}
 
 
 def api_ssl_context():
@@ -24,40 +24,18 @@ def api_ssl_context():
     return ctx
 
 
-def api_post(path, payload, token=None):
+def api_post(path, payload):
     data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
+    headers = {"Content-Type": "application/json", "x-api-key": API_KEY}
     req = urllib.request.Request(
         f"{API_BASE_URL}{path}",
         data=data,
         headers=headers,
         method="POST",
     )
-
     with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
         body = response.read().decode("utf-8")
-        if not body:
-            return {}
-        return json.loads(body)
-
-
-def login():
-    global TOKEN
-
-    response = api_post(
-        "/auth/login",
-        {
-            "username": API_USERNAME,
-            "password": API_PASSWORD,
-        },
-    )
-
-    TOKEN = response["token"]
-    print("Logged in to Zig API via nginx", flush=True)
+        return json.loads(body) if body else {}
 
 
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -69,67 +47,47 @@ def on_connect(client, userdata, flags, rc, properties=None):
 
 
 def on_message(client, userdata, msg):
-    global TOKEN
 
     try:
         payload = json.loads(msg.payload.decode())
-        sensor_id = msg.topic.split("/")[0]
         value = float(payload["value"])
         unit = str(payload.get("unit", ""))
 
-        if unit not in ("C", "%"):
-            raise ValueError(f"invalid unit: {unit}")
+        if unit == "C":
+            pending["temperature"] = value
+        elif unit == "%":
+            pending["humidity"] = value
+        else:
+            print(f"Unbekannte Einheit: {unit}", flush=True)
+            return
 
-        if unit == "%" and not (0 <= value <= 100):
-            raise ValueError(f"humidity out of range: {value}")
-
-        if unit == "C" and not (-40 <= value <= 80):
-            raise ValueError(f"temperature out of range: {value}")
-
-        if TOKEN is None:
-            login()
-
-        try:
-            api_post(
-                "/api/v1/sensor-data",
-                {
-                    "sensor_id": sensor_id,
-                    "value": value,
-                    "unit": unit,
-                },
-                token=TOKEN,
-            )
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                print("Token expired or invalid, logging in again", flush=True)
-                login()
-                api_post(
-                    "/api/v1/sensor-data",
+        # Forward to server.js only when both values are present.
+        if "temperature" in pending and "humidity" in pending:
+            timestamp = datetime.now(timezone.utc).isoformat()
+        
+            try:
+                result = api_post(
+                    "/api/internal/sensordata",
                     {
-                        "sensor_id": sensor_id,
-                        "value": value,
-                        "unit": unit,
+                        "temperature": pending["temperature"],
+                        "humidity": pending["humidity"],
+                        "timestamp": timestamp,
                     },
-                    token=TOKEN,
                 )
-            else:
-                raise
-
-        print(f"Forwarded {sensor_id}: {value} {unit} via nginx to Zig API", flush=True)
+                print(f"Gespeichert: {pending} → {result}", flush=True)
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    print(f"HTTP-Fehler: {e.code}: {e.read().decode()}", flush=True)
+            except Exception as e:
+                    print(f"Fehler beim Senden der Daten: {e}", flush=True)
+            finally:
+                pending.clear()  # Clear buffer after attempt
 
     except Exception as e:
-        print(f"Error processing message: {e}", flush=True)
+        print(f"Fehler beim Verarbeiten der Nachricht: {e}", flush=True)
 
 
 def main():
-    while True:
-        try:
-            login()
-            break
-        except Exception as e:
-            print(f"API not ready, retrying: {e}", flush=True)
-            time.sleep(3)
-
     tls_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     tls_ctx.load_verify_locations("/run/secrets/ca_cert")
 

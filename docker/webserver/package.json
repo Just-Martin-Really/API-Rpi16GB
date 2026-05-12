@@ -1,0 +1,13 @@
+{
+    "name": "iot-webserver",
+    "version": "1.0.0",
+    "main": "server.js",
+    "type": "commonjs",
+    "dependencies": {
+        "express": "^4.18.3",
+        "pg": "^8.11.5"
+    },
+    "scripts": {
+        "start": "node server.js"
+    }
+}

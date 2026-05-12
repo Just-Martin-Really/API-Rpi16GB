@@ -29,7 +29,7 @@ openssl req -new \
     -subj "/CN=$DOMAIN/O=DHBW/C=DE" \
     -out "$NGINX_DIR/backend.csr"
 NGINX_EXT=$(mktemp)
-printf "subjectAltName=DNS:%s,DNS:localhost,IP:192.168.50.30" "$DOMAIN" > "$NGINX_EXT"
+printf "subjectAltName=DNS:%s,DNS:localhost,DNS:nginx,IP:192.168.50.30" "$DOMAIN" > "$NGINX_EXT"
 openssl x509 -req -in "$NGINX_DIR/backend.csr" \
     -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
     -out "$NGINX_DIR/backend.crt" \
