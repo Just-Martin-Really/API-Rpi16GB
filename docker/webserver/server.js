@@ -1,5 +1,6 @@
 const express = require("express");
 const fs = require("fs");
+const crypto = require("crypto");
 const { Pool } = require("pg");
 
 const app = express();
@@ -29,9 +30,10 @@ const pool = new Pool({
 });
 
 function authenticateController(req, res, next) {
-  const providedKey = req.header("x-api-key");
+  const providedKey = req.header("x-api-key") || "";
 
-  if (!API_KEY || providedKey !== API_KEY) {
+  // timing-safe compare to prevent against timing attacks
+  if (!API_KEY || providedKey.length !== API_KEY.length || !crypto.timingSafeEqual(Buffer.from(providedKey), Buffer.from(API_KEY))) {
     return res.status(401).json({ error: "unauthorized" });
   }
 
@@ -43,7 +45,11 @@ function validateSensorPayload(body) {
     throw new Error("payload must be a JSON object");
   }
 
-  const { temperature, humidity, timestamp } = body;
+  const { sensor_id, temperature, humidity, timestamp } = body;
+
+  if (!sensor_id || typeof sensor_id !== "string" || sensor_id.length > 64) {
+    throw new Error("sensor_id must be a non-empty string up to 64 characters");
+  }
 
   if (typeof temperature !== "number" || !Number.isFinite(temperature)) {
     throw new Error("temperature must be a number");
@@ -53,12 +59,13 @@ function validateSensorPayload(body) {
     throw new Error("humidity must be a number");
   }
 
-  if (temperature < 0 || temperature > 60) {
-    throw new Error("temperature out of allowed range 0..60");
+  // Range corresponds the actual sensor range of the DHT22.
+  if (temperature < -40 || temperature > 80) {
+    throw new Error("temperature out of allowed range -40..80");
   }
 
-  if (humidity < 10 || humidity > 70) {
-    throw new Error("humidity out of allowed range 10..70");
+  if (humidity < 0 || humidity > 100) {
+    throw new Error("humidity out of allowed range 0..100");
   }
 
   const parsedTimestamp = new Date(timestamp);
@@ -80,13 +87,14 @@ function validateSensorPayload(body) {
   }
 
   return {
+    sensor_id,
     temperature,
     humidity,
     timestamp: parsedTimestamp,
   };
 }
 
-async function insertSensorMeasurements({ temperature, humidity, timestamp }) {
+async function insertSensorMeasurements({ sensor_id, temperature, humidity, timestamp }) {
   const query = `
     INSERT INTO sensor_data (sensor_id, value, unit, recorded_at)
     VALUES
@@ -96,14 +104,8 @@ async function insertSensorMeasurements({ temperature, humidity, timestamp }) {
   `;
 
   const values = [
-    "temperature",
-    temperature,
-    "C",
-    timestamp,
-    "humidity",
-    humidity,
-    "%",
-    timestamp
+    `${sensor_id}_temperature`, temperature, "C", timestamp,
+    `${sensor_id}_humidity`, humidity, "%", timestamp
   ];
 
   const result = await pool.query(query, values);
@@ -121,15 +123,16 @@ app.post(
     try {
       const sensorData = validateSensorPayload(req.body);
       const inserted = await insertSensorMeasurements(sensorData);
-
       res.status(201).json({
         status: "ok",
         inserted,
       });
     } catch (err) {
-      res.status(400).json({
-        error: err.message || "invalid payload",
-      });
+      //DB-Error as 500, validation and auth errors as 400
+      if (err.message.includes("DB") || err.code){
+        return res.status(500).json({ error: "internal server error" });
+      }
+      res.status(400).json({ error: err.message || "invalid payload" });
     }
   },
 );

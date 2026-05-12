@@ -14,8 +14,11 @@ MQTT_PASS = open("/run/secrets/mqtt_controller_password").read().strip()
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://nginx")
 API_KEY = open("/run/secrets/api_key").read().strip()
 
-# Buffer until both measurement values for a round are available.
+# Buffer per sensor_id: { sensor_id: { "temperature": (value, timestamp), "humidity": (value, timestamp) } }
 pending = {}
+
+# Maximum age of buffered data - just under the 60s sensor refresh rate.
+FRESHNESS_SECONDS = 55
 
 
 def api_ssl_context():
@@ -52,36 +55,67 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
         value = float(payload["value"])
         unit = str(payload.get("unit", ""))
+        sensor_id = msg.topic.split("/")[0]
 
+        # Range checks before buffering.
         if unit == "C":
-            pending["temperature"] = value
+            if not (-40 <= value <= 80):
+                print(f"Temperatur außerhalb der Range für {sensor_id}: {value}", flush=True)
+                return
+            if sensor_id not in pending:
+                pending[sensor_id] = {}
+            pending[sensor_id]["temperature"] = (value, datetime.now(timezone.utc))
+        
         elif unit == "%":
-            pending["humidity"] = value
+            if not (0 <= value <= 100):
+                print(f"Luftfeuchtigkeit außerhalb der Range für {sensor_id}: {value}", flush=True)
+                return
+            if sensor_id not in pending:
+                pending[sensor_id] = {}
+            pending[sensor_id]["humidity"] = (value, datetime.now(timezone.utc))
+        
         else:
             print(f"Unbekannte Einheit: {unit}", flush=True)
             return
 
+        buf = pending.get(sensor_id, {})
+
         # Forward to server.js only when both values are present.
-        if "temperature" in pending and "humidity" in pending:
-            timestamp = datetime.now(timezone.utc).isoformat()
+        if "temperature" not in buf or "humidity" not in buf:
+            return
         
-            try:
-                result = api_post(
-                    "/api/internal/sensordata",
-                    {
-                        "temperature": pending["temperature"],
-                        "humidity": pending["humidity"],
-                        "timestamp": timestamp,
-                    },
-                )
-                print(f"Gespeichert: {pending} → {result}", flush=True)
-            except urllib.error.HTTPError as e:
-                if e.code == 401:
-                    print(f"HTTP-Fehler: {e.code}: {e.read().decode()}", flush=True)
-            except Exception as e:
-                    print(f"Fehler beim Senden der Daten: {e}", flush=True)
-            finally:
-                pending.clear()  # Clear buffer after attempt
+        temp_val, temp_time = buf["temperature"]
+        hum_val, hum_time = buf["humidity"]
+        now = datetime.now(timezone.utc)
+
+        # Freshness check: discard outdated data.
+        temp_age = (now - temp_time).total_seconds()
+        hum_age = (now - hum_time).total_seconds()
+
+        if temp_age > FRESHNESS_SECONDS or hum_age > FRESHNESS_SECONDS:
+            print(f"Veraltete Daten für {sensor_id} (temp: {temp_age:.0f}s, hum: {hum_age:.0f}s), verwerfe Buffer", flush=True)
+            pending.pop(sensor_id, None)
+            return
+        
+        timestamp = now.isoformat()
+
+        try:
+            result = api_post(
+                "/api/internal/sensordata",
+                {
+                    "sensor_id": sensor_id,
+                    "temperature": temp_val,
+                    "humidity": hum_val,
+                    "timestamp": timestamp,
+                },
+            )
+            print(f"Gespeichert: {sensor_id}: temp={temp_val} hum={hum_val} → {result}", flush=True)
+        except urllib.error.HTTPError as e:
+                print(f"HTTP-Fehler: {e.code}: {e.read().decode()}", flush=True)
+        except Exception as e:
+                print(f"Fehler beim Senden der Daten: {e}", flush=True)
+        finally:
+            pending.pop(sensor_id, None)
 
     except Exception as e:
         print(f"Fehler beim Verarbeiten der Nachricht: {e}", flush=True)

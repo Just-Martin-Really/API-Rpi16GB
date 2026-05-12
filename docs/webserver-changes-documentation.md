@@ -7,7 +7,7 @@
 
 **Data flow:**
 1. Pico (DHT22 sensor) publishes `{value, unit}` via MQTT/TLS to mosquitto
-2. `controller.py` subscribes to MQTT, collects temperature and humidity, forwards a combined payload via HTTPS
+2. `controller.py` subscribes to MQTT, collects temperature and humidity per `sensor_id`, forwards a combined payload via HTTPS
 3. nginx (reverse proxy) receives the request and routes `/api/internal/` to `server.js`
 4. `server.js` validates the payload and writes two rows to PostgreSQL (one for temperature, one for humidity)
 
@@ -21,7 +21,7 @@
 | Component         | Role                                                                                  | Auth                         |
 |                   |                                                                                       |                              |
 | Pico (`main.py`)  | Reads DHT22, publishes `{value, unit}` via MQTT/TLS                                   | MQTT user/password           |
-| `controller.py`   | Subscribes MQTT, combines temp+humidity, POSTs to `server.js`                         | API-Key (`x-api-key`header)  |
+| `controller.py`   | Subscribes MQTT, buffers per `sensor_id`, combines temp+humidity, POSTs to `server.js`| API-Key (`x-api-key`header)  |
 | nginx             | Reverse proxy, TLS termination, rate limiting, routes `/api/internal/` to `server.js` | —                            |
 | `server.js`       | Validates payload, writes to PostgreSQL                                               | API-Key                      |
 | Zig backend       | Dashboard API, reads sensor data, manages actuator commands                           | JWT Bearer Token             |
@@ -53,6 +53,7 @@ x-api-key: <api_key>
 Content-Type: application/json
 
 {
+  "sensor_id": "sensor01",
   "temperature": 22.5,
   "humidity": 55.0,
   "timestamp": "2026-05-11T12:00:00.000Z"
@@ -63,25 +64,47 @@ Content-Type: application/json
 
 | Field         | Type            | Rule                                                                             |
 |               |                 |                                                                                  |
-| `temperature` | number          | Must be finite, range 0..60 °C                                                   |
-| `humidity`    | number          | Must be finite, range 10..70 %                                                   |
+| `sensor_id`   | string          | Non-empty, max 64 characters — identifies the physical sensor unit               |
+| `temperature` | number          | Must be finite, range -40..80 °C (DHT22 sensor spec)                             |
+| `humidity`    | number          | Must be finite, range 0..100 % (DHT22 sensor spec)                               |
 | `timestamp`   | ISO 8601 string | Must be valid date, not more than 5 minutes in the future, not older than 7 days |
 
 > **Note:** The 7-day limit is intentionally aligned with the archiver job, which moves data older than 7 days to `sensor_data_archive`. Accepting older data would write to the wrong table.
 
-### 3.4 Database Write
+> **Note:** Ranges are aligned with the actual DHT22 sensor specifications — not artificially narrowed. The controller performs the same range checks before buffering.
 
-On successful validation, `server.js` inserts two rows into `sensor_data` in a single query:
+### 3.4 Authentication
+
+The API-Key comparison uses `crypto.timingSafeEqual` to prevent timing attacks. The key is read from `/run/secrets/api_key` at startup.
+
+### 3.5 Database Write
+
+On successful validation, `server.js` inserts two rows into `sensor_data` in a single query. The `sensor_id` from the payload is used as a prefix to distinguish measurement types:
 
 ```sql
 INSERT INTO sensor_data (sensor_id, value, unit, recorded_at)
 VALUES
-  ('temperature', <value>, 'C', <timestamp>),
-  ('humidity',    <value>, '%', <timestamp>)
+  ('<sensor_id>_temperature', <value>, 'C', <timestamp>),
+  ('<sensor_id>_humidity',    <value>, '%', <timestamp>)
 ```
 
+Example for `sensor_id = "sensor01"`:
+```sql
+  ('sensor01_temperature', 22.5, 'C', '2026-05-11T12:00:00Z'),
+  ('sensor01_humidity',    55.0, '%', '2026-05-11T12:00:00Z')
+```
 
-## 4. controller.py — Changes
+### 3.6 Error Handling
+
+| Error type                                              | HTTP status |
+|                                                         |             |
+| Validation error (invalid payload, out-of-range values) | `400`       |
+| Database / infrastructure error                         | `500`       |
+| Missing or wrong API-Key                                | `401`       |
+
+## 4. controller.py
+
+### 4.1 Changes from original version
 
 The controller was updated to work with `server.js` instead of the Zig backend.
 
@@ -90,10 +113,43 @@ The controller was updated to work with `server.js` instead of the Zig backend.
 | JWT login via `POST /auth/login`                           | No login — API-Key only                                                   |
 | `Authorization: Bearer <token>` header                     | `x-api-key: <key>` header                                                 |
 | `POST /api/v1/sensor-data` with `{sensor_id, value, unit}` | `POST /api/internal/sensordata` with `{temperature, humidity, timestamp}` |
-| One MQTT message → one API call                            | Two MQTT messages collected → one combined API call |
+| One MQTT message → one API call                            | Two MQTT messages buffered per `sensor_id` → one combined API call        |
 
-The controller uses a `pending{}` buffer to collect both MQTT messages. The Pico publishes temperature and humidity as separate messages on the same topic. Once both are present in the buffer, a single combined request is sent to `server.js` and the buffer is cleared.
+### 4.2. Buffer Logic
 
+The Pico publishes temperature and humidity as two separate MQTT messages on the same topic. The controller uses a `pending{}` buffer keyed by `sensor_id` to collect both values before forwarding.
+
+```
+pending = {
+  "sensor01": {
+    "temperature": (22.5, <timestamp>),
+    "humidity":    (55.0, <timestamp>)
+  }
+}
+```
+
+A combined request is only sent when **both** values are present **and** fresh. After sending (or on error), the buffer entry for that `sensor_id` is cleared.
+
+### 4.3 Freshness Window
+
+```python
+FRESHNESS_SECONDS = 55  # just under the Pico publish interval of 60s
+```
+
+If either buffered value is older than 55 seconds when the second value arrives, the entire buffer entry for that `sensor_id` is discarded. This prevents stale temperature values from being paired with a new humidity reading.
+
+### 4.4 Range Checks
+
+Range checks are performed **before** buffering — invalid values are discarded immediately:
+
+| Measurement | Range      |
+|             |            |
+| Temperature | -40..80 °C |
+| Humidity    | 0..100 %   |
+
+### 4.5 Multi-Sensor Support
+
+Because the buffer is keyed by `sensor_id` (extracted from `msg.topic.split("/")[0]`), multiple physical sensors on different topics are handled independently without interference.
 
 ## 5. API Key Setup
 
@@ -196,15 +252,17 @@ location /api/ {
 
 ## 8. File Overview
 
-| File                              | Change                                                                 |
-|                                   |                                                                        |
-| `docker/webserver/server.js`      | New — Node.js ingestion endpoint                                       |
-| `docker/webserver/Dockerfile`     | New — builds the server.js container                                   |
-| `docker/webserver/package.json`   | New — dependencies (express, pg)                                       |
-| `docker/controller/controller.py` | Modified — API-Key instead of JWT, combines MQTT messages              |
-| `docker/docker-compose.yml`       | Modified — added webserver service, api_key secret, updated controller |
-| `docker/nginx/nginx.conf`         | Modified — added `/api/internal/` routing to webserver                 |
-| `docker/secrets/api_key.txt`      | New — must be generated manually, never committed to git               |
+| File                                 | Change                                                                 |
+|                                      |                                                                        |
+| `docker/webserver/server.js`         | New — Node.js ingestion endpoint                                       |
+| `docker/webserver/Dockerfile`        | New — builds the server.js container                                   |
+| `docker/webserver/package.json`      | New — dependencies (express, pg)                                       |
+| `docker/webserver/package-lock.json` | New — lockfile for reproducible builds                                 |
+| `docker/controller/controller.py`    | Modified — API-Key instead of JWT, combines MQTT messages              |
+| `docker/docker-compose.yml`          | Modified — added webserver service, api_key secret, updated controller |
+| `docker/nginx/nginx.conf`            | Modified — added `/api/internal/` routing to webserver                 |
+| `docker/secrets/api_key.txt`         | New — must be generated manually, never committed to git               |
+| `docker/setup_tls.sh`                | Modified — added `DNS:nginx` SAN, added 10s abort warning              |
 
 
 ## 9. Note on Database Choice
@@ -217,8 +275,11 @@ Since we used PostgreSQL instead of MariaDB, there is the following difference i
 
 ### What changed and why
 
-`setup_tls.sh` was updated to include `DNS:nginx` as a Subject Alternative
-Name (SAN) in the backend TLS certificate.
+`setup_tls.sh` was updated in two ways:
+
+**1. Added `DNS:nginx` as Subject Alternative Name (SAN)**
+
+`controller.py` connects to `https://nginx` inside the Docker network. The hostname `nginx` must be listed as a valid SAN in the TLS certificate — otherwise the SSL handshake fails and the controller cannot reach `server.js`.
 
 **Before:**
 ```bash
@@ -230,11 +291,9 @@ printf "subjectAltName=DNS:%s,DNS:localhost,IP:...
 printf "subjectAltName=DNS:%s,DNS:localhost,DNS:nginx,...
 ```
 
-This is necessary because `controller.py` connects to `https://nginx` inside
-the Docker network. When verifying the TLS certificate, the hostname `nginx`
-must be listed as a valid SAN — otherwise the SSL handshake fails and the
-controller cannot reach `server.js`.
+**2. Added 10-second abort warning**
 
+The script now prints a warning and waits 10 seconds before overwriting existing certificates, giving operators time to abort with `Ctrl+C`.
 
 ### What to do on the Pi
 

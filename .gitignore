@@ -17,3 +17,6 @@ docker/secrets/
 
 # OS
 .DS_Store
+
+# Node modules (can be reinstalled with npm ci)
+docker/webserver/node_modules/

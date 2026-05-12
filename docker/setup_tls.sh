@@ -13,8 +13,16 @@ NGINX_DIR="/etc/ssl/backend"
 MQTT_DIR="$(dirname "$0")/mosquitto/ssl"
 
 mkdir -p "$CA_DIR" "$NGINX_DIR" "$MQTT_DIR"
+echo "⚠ Warning: This script will overwrite existing certificates in:"
+echo "  $CA_DIR"
+echo "  $NGINX_DIR"
+echo "  $MQTT_DIR"
+echo "  $(dirname "$0")/secrets/ca_cert.txt"
+echo "Press Ctrl+C within 10 seconds to abort..."
+sleep 10
 
 echo "==> Generating CA key and certificate"
+
 openssl genrsa -out "$CA_DIR/ca.key" 4096
 openssl req -x509 -new -nodes \
     -key "$CA_DIR/ca.key" \
