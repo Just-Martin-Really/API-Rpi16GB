@@ -69,6 +69,25 @@ JWT-Implementierung in Zig (HS256, 24h TTL) ohne externe Bibliothek:
 - Mosquitto MQTT Broker mit TLS auf Port 8883, kein Anonymous-Zugang, ACL pro Sensor: `sensor01` darf nur auf `sensor01/data` schreiben, `controller` darf `sensor+/data` lesen und `actuator+/data` schreiben
 - `controller.py`: abonniert alle Sensor-MQTT-Topics → schreibt in DB; pollt `actuator_commands` alle 2 Sekunden → publiziert per MQTT an die Aktoren, setzt `sent_at`
 
+### Schritt 8 — ModSecurity-WAF + OWASP Core Rule Set (Kap4 4.2)
+
+nginx läuft nicht mehr als plain `nginx:alpine`, sondern als `owasp/modsecurity-crs:nginx-alpine`. Das Image bringt libmodsecurity 3, den ModSecurity-nginx-Konnektor und die OWASP Core Rules mit.
+
+Die alte `docker/nginx/nginx.conf` wurde entfernt, weil das Image eine eigene top-level `nginx.conf` mit dem ModSecurity-Modul-Load mitbringt. Die Projekt-Anpassungen liegen jetzt unter:
+
+- `docker/nginx/templates/conf.d/default.conf.template`: eigener Server-Block (TLS 1.2/1.3, Rate Limiting, Subnet-Whitelist, `/health` `/auth/` `/api/`-Locations, `modsecurity on;`)
+- `docker/nginx/modsec/main.conf`: Include-Kette aus Image-Basis-Config, OWASP CRS, eigene Regeln, eigene FP-Exclusions
+- `docker/nginx/modsec/custom-rules.conf`: Demo-Regel `id:1000` aus Kap4 4-19 (XSS-Filter auf `REQUEST_URI`)
+- `docker/nginx/modsec/exclusions.conf`: Platzhalter für CRS-False-Positive-Exclusions
+
+Die ModSecurity-Direktiven aus Kap4 4-17 (`SecRuleEngine`, `SecRequestBodyAccess`, `SecResponseBodyAccess`, `SecAuditEngine RelevantOnly`, `SecAuditLog /dev/stdout`, `SecAuditLogFormat JSON`) werden per Env-Variablen am nginx-Service gesetzt, das Image befüllt seine `modsecurity.conf` daraus.
+
+**Engine-Modus**: Start in `DetectionOnly`. CRS-Treffer landen im Audit-Log, blockieren aber noch nicht. Nach einer Beobachtungsphase mit echtem Traffic und Tuning der Exclusions wird `MODSEC_RULE_ENGINE` in `docker-compose.yml` auf `On` umgestellt.
+
+**Paranoia-Level**: 1 (CRS-Default).
+
+**Pfad-Abweichung von Folie 4-17**: Die Folie nennt `/etc/nginx/modsecurity/...`. Das OWASP-Image legt die identischen Dateien unter `/etc/modsecurity.d/...` ab. Inhalt, Regelwerk und Audit-Format stimmen mit der Folie überein, nur die Pfade im Container sind anders.
+
 ---
 
 ## Architektur
@@ -79,7 +98,7 @@ JWT-Implementierung in Zig (HS256, 24h TTL) ohne externe Bibliothek:
 host (RPi 5 16 GB)
 │
 ├── app-net (172.20.0.0/24)
-│   ├── nginx      — Reverse Proxy, einziger Eintrittspunkt aus dem WLAN
+│   ├── nginx      — Reverse Proxy + ModSecurity-WAF (OWASP CRS), einziger Eintrittspunkt aus dem WLAN
 │   ├── backend    — Zig HTTP-Server
 │   ├── postgres   — nicht direkt vom Host erreichbar
 │   ├── mosquitto  — erreichbar für controller
@@ -277,6 +296,46 @@ cd docker && docker compose up --build -d --no-deps backend
 ```
 
 `--no-deps` baut nur den Backend-Container neu, ohne postgres oder nginx anzufassen.
+
+---
+
+## WAF-Management
+
+**Audit-Log live ansehen (JSON):**
+
+```sh
+docker compose logs -f nginx | grep -oE '\{.*\}' | jq 'select(.transaction)'
+```
+
+**Vom Detection- in den Blocking-Modus umschalten** (nach FP-Tuning):
+
+In `docker/docker-compose.yml` am nginx-Service:
+
+```yaml
+MODSEC_RULE_ENGINE: On   # vorher: DetectionOnly
+```
+
+Dann:
+
+```sh
+cd ~/API-Rpi16GB/docker && docker compose up -d --no-deps nginx
+```
+
+**False-Positive-Exclusion hinzufügen**: Regel-ID aus dem Audit-Log lesen, dann in `docker/nginx/modsec/exclusions.conf`:
+
+```
+SecRuleRemoveById 942100
+```
+
+Jeder Eintrag braucht im Kommentar die Regel-ID, den Pfad und den legitimen Request, der gefeuert hat.
+
+**Demo: Angriff testen**, Regel `id:1000` feuert auf `<script>` in der URI:
+
+```sh
+curl -k 'https://backend-server.local/api/v1/sensor-data?x=<script>'
+# DetectionOnly: 200 + Audit-Log-Eintrag
+# On:           403 Forbidden + Audit-Log-Eintrag
+```
 
 ---
 
