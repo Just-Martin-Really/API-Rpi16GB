@@ -16,14 +16,14 @@ secrets:
     file: ./secrets/db_read_password.txt
   jwt_secret:
     file: ./secrets/jwt_secret.txt
-  api_password:
-    file: ./secrets/api_password.txt
   mqtt_controller_user:
     file: ./secrets/mqtt_controller_user.txt
   mqtt_controller_password:
     file: ./secrets/mqtt_controller_password.txt
   ca_cert:
     file: ./secrets/ca_cert.txt
+  api_key:
+    file: ./secrets/api_key.txt
 
 services:
 
@@ -166,15 +166,33 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
       API_BASE_URL: https://nginx
-      API_USERNAME: admin
     secrets:
-      - api_password
       - mqtt_controller_user
       - mqtt_controller_password
       - ca_cert
+      - api_key
     networks:
       - app-net
       - sensor-net
     depends_on:
       - nginx
       - mosquitto
+
+  # ── Webserver ─────────────────────────────────────────
+  webserver:
+    build:
+      context: ./webserver
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: sensor
+      DB_USER: iot_write_user
+    secrets:
+      - db_write_password
+      - api_key
+    networks:
+      - app-net
+    depends_on:
+      - postgres
