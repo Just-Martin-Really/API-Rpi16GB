@@ -68,13 +68,13 @@ services:
     image: owasp/modsecurity-crs:nginx-alpine
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:8080"
+      - "443:8443"
     environment:
       # Network & TLS
       SERVER_NAME: backend.lab.local
-      PORT: "80"
-      SSL_PORT: "443"
+      PORT: "8080"
+      SSL_PORT: "8443"
       BACKEND: "http://backend:8080"
       SSL_CERT_FILE: /etc/nginx/ssl/backend.crt
       SSL_CERT_KEY_FILE: /etc/nginx/ssl/backend.key
