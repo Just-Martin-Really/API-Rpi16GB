@@ -20,10 +20,6 @@ server {
     ssl_protocols       ${SSL_PROTOCOLS};
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
-    # ModSecurity: loads image base config + OWASP CRS + custom rules + FP exclusions.
-    modsecurity on;
-    modsecurity_rules_file /etc/nginx/modsec/main.conf;
-
     # Subnet allowlist: Production WLAN + internal Docker bridge networks.
     allow 192.168.50.0/24;
     allow 172.16.0.0/12;
