@@ -65,6 +65,7 @@ cp "$CA_DIR/ca.crt" "$MQTT_DIR/ca.crt"
 # mosquitto runs as a non-root user inside the container; the bind-mounted
 # key file must be world-readable or the process gets EACCES on startup.
 chmod 644 "$MQTT_DIR/broker.key" "$MQTT_DIR/broker.crt" "$MQTT_DIR/ca.crt"
+chmod 644 "$NGINX_DIR/backend.key"
 
 echo "==> Copying CA cert to Docker secrets dir"
 mkdir -p "$(dirname "$0")/secrets"
