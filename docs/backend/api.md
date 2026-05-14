@@ -101,14 +101,16 @@ Queues a command for an actuator. The controller service picks it up within ~2 s
 ```json
 {
   "actuator_id": "actuator01",
-  "command": "on"
+  "command": "FAN_ON"
 }
 ```
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `actuator_id` | string | yes | max 64 chars, must match a known actuator |
-| `command` | string | yes | max 64 chars, e.g. `"on"`, `"off"` |
+| `actuator_id` | string | yes | max 64 chars, must match `^[A-Za-z0-9_-]+$` to be dispatched by the controller |
+| `command` | string | yes | max 64 chars, must match `^[A-Z0-9_]+$` to be dispatched; current commands: `FAN_ON`, `FAN_OFF`, `HEAT_ON`, `HEAT_OFF` |
+
+Rows whose `actuator_id` or `command` fail the regex are accepted by the API but skipped (and marked sent) by the controller to prevent MQTT topic injection from DB content.
 
 **Response 201**
 ```json
