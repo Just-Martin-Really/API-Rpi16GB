@@ -20,6 +20,17 @@ server {
     ssl_protocols       ${SSL_PROTOCOLS};
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
+    # Container-local healthcheck endpoint. Loopback only, bypasses the
+    # subnet allowlist and ModSecurity since Docker probes it directly.
+    location = /healthz {
+        allow 127.0.0.1;
+        deny  all;
+        modsecurity off;
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
     # Subnet allowlist: Production WLAN + internal Docker bridge networks.
     allow 192.168.50.0/24;
     allow 172.16.0.0/12;
