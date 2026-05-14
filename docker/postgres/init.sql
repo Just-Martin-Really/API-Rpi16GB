@@ -55,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
     ON actuator_commands (issued_at)
     WHERE sent_at IS NULL;
 
-GRANT INSERT, SELECT ON TABLE actuator_commands TO iot_write_user;
+GRANT INSERT, SELECT, UPDATE ON TABLE actuator_commands TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE actuator_commands_id_seq TO iot_write_user;
 
 -- Archive table: rows older than 7 days are moved here; purged after 3 years

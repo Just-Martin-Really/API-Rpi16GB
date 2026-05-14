@@ -17,3 +17,9 @@ CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON sensor_data_archive (archi
 GRANT DELETE ON TABLE sensor_data TO iot_write_user;
 GRANT SELECT, INSERT, DELETE ON TABLE sensor_data_archive TO iot_write_user;
 GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
+
+ALTER TABLE actuator_commands ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
+    ON actuator_commands (issued_at)
+    WHERE sent_at IS NULL;
+GRANT UPDATE ON TABLE actuator_commands TO iot_write_user;

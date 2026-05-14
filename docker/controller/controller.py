@@ -1,10 +1,15 @@
 import json
 import os
+import re
 import ssl
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
+
+ACTUATOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+COMMAND_RE = re.compile(r"^[A-Z0-9_]+$")
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", 8883))
@@ -13,6 +18,8 @@ MQTT_PASS = open("/run/secrets/mqtt_controller_password").read().strip()
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://nginx")
 API_KEY = open("/run/secrets/api_key").read().strip()
+
+ACTUATOR_POLL_SECONDS = 2
 
 # Buffer per sensor_id: { sensor_id: { "temperature": (value, timestamp), "humidity": (value, timestamp) } }
 pending = {}
@@ -35,6 +42,17 @@ def api_post(path, payload):
         data=data,
         headers=headers,
         method="POST",
+    )
+    with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
+        body = response.read().decode("utf-8")
+        return json.loads(body) if body else {}
+
+
+def api_get(path):
+    req = urllib.request.Request(
+        f"{API_BASE_URL}{path}",
+        headers={"x-api-key": API_KEY},
+        method="GET",
     )
     with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
         body = response.read().decode("utf-8")
@@ -121,6 +139,28 @@ def on_message(client, userdata, msg):
         print(f"Fehler beim Verarbeiten der Nachricht: {e}", flush=True)
 
 
+def drain_actuator_commands(client):
+    data = api_get("/api/internal/actuator-commands")
+    rows = data.get("commands", [])
+    for row in rows:
+        row_id = row["id"]
+        actuator_id = row["actuator_id"]
+        command = row["command"]
+        if not ACTUATOR_ID_RE.match(actuator_id) or not COMMAND_RE.match(command):
+            print(f"actuator skipped invalid row id={row_id}: actuator_id={actuator_id!r} command={command!r}", flush=True)
+            api_post("/api/internal/actuator-commands/sent", {"id": row_id})
+            continue
+        topic = f"{actuator_id}/data"
+        payload = json.dumps({"command": command})
+        info = client.publish(topic, payload, qos=1)
+        info.wait_for_publish(timeout=5)
+        if not info.is_published():
+            print(f"actuator publish failed: id={row_id}", flush=True)
+            continue
+        api_post("/api/internal/actuator-commands/sent", {"id": row_id})
+        print(f"actuator sent: {actuator_id} <- {command} (id={row_id})", flush=True)
+
+
 def main():
     tls_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     tls_ctx.load_verify_locations("/run/secrets/ca_cert")
@@ -132,7 +172,14 @@ def main():
     client.on_message = on_message
 
     client.connect(MQTT_HOST, MQTT_PORT)
-    client.loop_forever()
+    client.loop_start()
+
+    while True:
+        try:
+            drain_actuator_commands(client)
+        except Exception as e:
+            print(f"actuator drain error: {e}", flush=True)
+        time.sleep(ACTUATOR_POLL_SECONDS)
 
 
 if __name__ == "__main__":
