@@ -254,6 +254,23 @@ Expected result:
 sensor01 | 22.4 | C
 ```
 
+## Operator Helpers
+
+Shell scripts under `scripts/` wrap the `/auth/login` + `/api/v1/actuator-command`
+flow so operators can toggle the Pico relays without hand-crafting curl calls.
+
+```sh
+cd scripts
+cp .env.example .env        # fill in BACKEND_URL + dashboard credentials
+./cooler.sh on              # FAN_ON
+./cooler.sh off             # FAN_OFF
+./heater.sh on              # HEAT_ON
+./heater.sh off             # HEAT_OFF
+```
+
+Run from a Mac on the Production WLAN (`BACKEND_URL=https://192.168.50.92`) or
+from the backend Pi itself (`BACKEND_URL=https://localhost`). Requires `jq`.
+
 ## Seeding Fake Data
 
 The `seeder` service generates realistic sensor data (temperature + humidity)
