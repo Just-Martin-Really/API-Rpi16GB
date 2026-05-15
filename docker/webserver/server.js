@@ -137,6 +137,41 @@ app.post(
   },
 );
 
+app.get(
+  "/api/internal/actuator-commands",
+  authenticateController,
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        "SELECT id, actuator_id, command FROM actuator_commands WHERE sent_at IS NULL ORDER BY issued_at LIMIT 100"
+      );
+      res.json({ commands: result.rows });
+    } catch (err) {
+      res.status(500).json({ error: "internal server error" });
+    }
+  },
+);
+
+app.post(
+  "/api/internal/actuator-commands/sent",
+  authenticateController,
+  async (req, res) => {
+    try {
+      const id = Number(req.body && req.body.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: "id must be a positive integer" });
+      }
+      const result = await pool.query(
+        "UPDATE actuator_commands SET sent_at = NOW() WHERE id = $1 AND sent_at IS NULL",
+        [id],
+      );
+      res.json({ updated: result.rowCount });
+    } catch (err) {
+      res.status(500).json({ error: "internal server error" });
+    }
+  },
+);
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`server.js listening on 0.0.0.0:${PORT}`);
 });
