@@ -1,8 +1,10 @@
 """
 seed_fake_data.py — fill sensor_data and sensor_data_archive with fake data.
 
-Generates realistic temperature and humidity readings (plus optional anomalies
-to simulate a malfunctioning sensor) and inserts them into both tables.
+Generates realistic temperature and humidity readings as a per-sensor random
+walk (so consecutive readings differ smoothly over time, not jumping multiple
+degrees per minute) and optionally injects anomalies to simulate a
+malfunctioning sensor.
 
 Smart split based on timestamp:
   - rows with recorded_at < NOW() - 7 days  →  sensor_data_archive
@@ -14,26 +16,44 @@ Sensor IDs use a "demo-" prefix so fake data is trivial to clean up:
   DELETE FROM sensor_data         WHERE sensor_id LIKE 'demo-%';
   DELETE FROM sensor_data_archive WHERE sensor_id LIKE 'demo-%';
 
+How values are generated:
+  - For each sensor, rows are spread evenly across the time window and
+    processed in chronological order.
+  - Each reading is the previous reading nudged by a small random step plus
+    a mean-reversion pull back toward the sensor's normal mean.
+  - The step is hard-capped at max_delta_per_min * dt_minutes, so a 60-second
+    gap between samples can never move the value by more than max_delta_per_min.
+  - Defaults assume a normally heated room: temp ~21.5 °C, humidity ~45 %.
+  - Anomalies bypass the cap on purpose and jump to mean + anomaly_magnitude
+    (that is what makes them anomalous).
+
 Usage (from the docker/ directory on the Pi):
   docker compose --profile tools run --rm seeder [options]
 
 Examples:
-  # 10 000 rows over the last 30 days, default sensors
+  # 10 000 rows over the last 30 days, default sensors, 0.5 % anomalies
   docker compose --profile tools run --rm seeder
 
   # large dataset spanning over 3 years to test the archive purge
   docker compose --profile tools run --rm seeder --rows 200000 --days 1100
 
-  # custom sensors, denser anomalies
+  # custom sensors, heavier corruption (5 % of rows are anomalies)
   docker compose --profile tools run --rm seeder \\
       --sensors demo-temp-01,demo-temp-02,demo-humid-01 \\
-      --rows 50000 --anomaly-rate 100
+      --rows 50000 --anomaly-percent 5
+
+  # clean run with no anomalies at all
+  docker compose --profile tools run --rm seeder --anomaly-percent 0
 
 CLI options:
-  --rows N           total rows to insert            (default 10000)
-  --days N           timestamp spread in days        (default 30)
-  --sensors a,b,c    comma-separated sensor IDs      (default demo-temp-01,demo-humid-01)
-  --anomaly-rate N   one anomaly every N rows        (default 500, set 0 to disable)
+  --rows N                 total rows to insert                       (default 10000)
+  --days N                 timestamp spread in days                   (default 30)
+  --sensors a,b,c          comma-separated sensor IDs                 (default demo-temp-01,demo-humid-01)
+  --anomaly-percent P      percentage of rows that are anomalies      (default 0.5, set 0 to disable)
+  --anomaly-magnitude M    how far an anomaly deviates from mean,
+                           in the sensor's unit (°C, % or unitless)   (default 15.0)
+  --max-delta-per-min F    cap on per-minute change for temperature
+                           sensors (humidity is scaled x6 internally) (default 0.25)
 
 Environment (provided by docker-compose):
   DB_HOST            postgres hostname inside app-net
@@ -42,6 +62,7 @@ Environment (provided by docker-compose):
 """
 
 import argparse
+import math
 import os
 import random
 from datetime import datetime, timedelta, timezone
@@ -52,22 +73,32 @@ from psycopg2.extras import execute_values
 BATCH_SIZE = 500
 ARCHIVE_THRESHOLD_DAYS = 7
 
+# Mean-reversion strength: each step pulls (mean - value) * REVERSION
+# fraction back toward the mean before adding random noise. Low enough
+# that walks meander, high enough that they don't drift away forever.
+REVERSION = 0.05
 
-def classify(sensor_id: str) -> tuple[str, float, float, float]:
-    """Return (unit, normal_mean, normal_stddev, anomaly_value) for a sensor ID."""
+
+def classify(sensor_id: str) -> tuple[str, float, float]:
+    """Return (unit, normal_mean, noise_stddev_per_min) for a sensor ID.
+
+    noise_stddev_per_min controls the size of the random step per minute
+    before it is clamped by max_delta_per_min.
+    """
     name = sensor_id.lower()
     if "temp" in name:
-        return ("°C", 22.0, 1.2, 40.0)
+        return ("°C", 21.5, 0.05)
     if "humid" in name:
-        return ("%", 45.0, 4.0, 95.0)
-    return ("u", 50.0, 10.0, 100.0)
+        return ("%", 45.0, 0.3)
+    return ("u", 50.0, 0.5)
 
 
-def generate_value(sensor_id: str, is_anomaly: bool) -> tuple[float, str]:
-    unit, mean, stddev, anomaly = classify(sensor_id)
-    if is_anomaly:
-        return (round(anomaly + random.uniform(-1.5, 1.5), 2), unit)
-    return (round(random.gauss(mean, stddev), 2), unit)
+def delta_cap_for(sensor_id: str, base_cap: float) -> float:
+    """Per-minute change cap for the sensor. Humidity moves faster than temp."""
+    name = sensor_id.lower()
+    if "humid" in name:
+        return base_cap * 6.0
+    return base_cap
 
 
 def connect():
@@ -103,25 +134,93 @@ def insert_batch_archive(cur, rows):
     )
 
 
+def generate_series(sensor_id, count, span_seconds, now,
+                    anomaly_indices, anomaly_magnitude, base_delta_cap):
+    """Yield (sensor_id, value, unit, recorded_at) tuples for one sensor.
+
+    Walks chronologically forward from oldest to newest so that each value
+    can depend on the previous one. anomaly_indices is a set of positions
+    (0..count-1) where the value should be forced to mean + anomaly_magnitude.
+    """
+    unit, mean, noise_stddev_per_min = classify(sensor_id)
+    delta_cap = delta_cap_for(sensor_id, base_delta_cap)
+
+    # Evenly-spaced timestamps from oldest to newest. Tiny jitter so multiple
+    # sensors don't all land on the exact same recorded_at.
+    if count == 1:
+        timestamps = [now - timedelta(seconds=span_seconds / 2)]
+    else:
+        step = span_seconds / (count - 1)
+        timestamps = [
+            now - timedelta(seconds=max(
+                0.0,
+                span_seconds - i * step + random.uniform(-step / 4, step / 4),
+            ))
+            for i in range(count)
+        ]
+
+    value = random.gauss(mean, noise_stddev_per_min * 10)  # seed somewhere near mean
+    prev_ts = timestamps[0]
+
+    for i, ts in enumerate(timestamps):
+        if i in anomaly_indices:
+            # Anomaly: snap to mean + magnitude, bypass the per-minute cap on
+            # purpose. The next non-anomaly reading will start walking back
+            # from this spike.
+            value = mean + anomaly_magnitude
+        else:
+            dt_minutes = max((ts - prev_ts).total_seconds() / 60.0, 1e-6)
+            # Mean-reverting random step, clamped to physical realism.
+            # Noise scales with sqrt(dt) so variance grows linearly in time,
+            # which is the standard Wiener-process behavior for a random walk.
+            pull = (mean - value) * REVERSION
+            noise = random.gauss(0.0, noise_stddev_per_min * math.sqrt(dt_minutes))
+            step_value = pull + noise
+            max_step = delta_cap * dt_minutes
+            if step_value > max_step:
+                step_value = max_step
+            elif step_value < -max_step:
+                step_value = -max_step
+            value += step_value
+
+        prev_ts = ts
+        yield (sensor_id, round(value, 2), unit, ts)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Seed fake sensor data.")
     parser.add_argument("--rows", type=int, default=10000)
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--sensors", type=str, default="demo-temp-01,demo-humid-01")
-    parser.add_argument("--anomaly-rate", type=int, default=500,
-                        help="one anomaly every N rows; 0 disables anomalies")
+    parser.add_argument("--anomaly-percent", type=float, default=0.5,
+                        help="percentage of rows that are anomalies; 0 disables anomalies")
+    parser.add_argument("--anomaly-magnitude", type=float, default=15.0,
+                        help="how far an anomaly deviates from the sensor mean, in its unit")
+    parser.add_argument("--max-delta-per-min", type=float, default=0.25,
+                        help="cap on per-minute change for temperature sensors "
+                             "(humidity is scaled internally)")
     args = parser.parse_args()
 
     sensors = [s.strip() for s in args.sensors.split(",") if s.strip()]
     if not sensors:
         parser.error("--sensors must contain at least one ID")
+    if args.anomaly_percent < 0 or args.anomaly_percent > 100:
+        parser.error("--anomaly-percent must be between 0 and 100")
 
     now = datetime.now(timezone.utc)
     archive_cutoff = now - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
     span_seconds = args.days * 24 * 3600
 
     print(f"generating {args.rows} rows across {args.days} days "
-          f"for sensors: {', '.join(sensors)}", flush=True)
+          f"for sensors: {', '.join(sensors)} "
+          f"(anomalies: {args.anomaly_percent}% @ +{args.anomaly_magnitude}, "
+          f"max temp delta: {args.max_delta_per_min}/min)", flush=True)
+
+    # Split row budget across sensors. Any remainder goes to the first sensors
+    # so total stays exactly --rows.
+    per_sensor = [args.rows // len(sensors)] * len(sensors)
+    for i in range(args.rows % len(sensors)):
+        per_sensor[i] += 1
 
     active_buf = []
     archive_buf = []
@@ -131,37 +230,36 @@ def main():
     try:
         with conn:
             with conn.cursor() as cur:
-                for i in range(args.rows):
-                    sensor_id = sensors[i % len(sensors)]
-                    is_anomaly = (
-                        args.anomaly_rate > 0
-                        and i > 0
-                        and i % args.anomaly_rate == 0
-                    )
-                    value, unit = generate_value(sensor_id, is_anomaly)
-                    if is_anomaly:
-                        counts["anomalies"] += 1
+                for sensor_id, count in zip(sensors, per_sensor):
+                    if count == 0:
+                        continue
 
-                    offset = random.uniform(0, span_seconds)
-                    recorded_at = now - timedelta(seconds=offset)
+                    n_anomalies = int(round(count * args.anomaly_percent / 100.0))
+                    anomaly_indices = set(random.sample(range(count), n_anomalies)) if n_anomalies > 0 else set()
+                    counts["anomalies"] += len(anomaly_indices)
 
-                    if recorded_at < archive_cutoff:
-                        archived_at = recorded_at + timedelta(days=ARCHIVE_THRESHOLD_DAYS)
-                        archive_buf.append((sensor_id, value, unit, recorded_at, archived_at))
-                    else:
-                        active_buf.append((sensor_id, value, unit, recorded_at))
+                    for sid, value, unit, recorded_at in generate_series(
+                        sensor_id, count, span_seconds, now,
+                        anomaly_indices, args.anomaly_magnitude,
+                        args.max_delta_per_min,
+                    ):
+                        if recorded_at < archive_cutoff:
+                            archived_at = recorded_at + timedelta(days=ARCHIVE_THRESHOLD_DAYS)
+                            archive_buf.append((sid, value, unit, recorded_at, archived_at))
+                        else:
+                            active_buf.append((sid, value, unit, recorded_at))
 
-                    if len(active_buf) >= BATCH_SIZE:
-                        insert_batch_active(cur, active_buf)
-                        counts["active"] += len(active_buf)
-                        active_buf.clear()
-                        print(f"  ...{counts['active'] + counts['archive']} rows inserted", flush=True)
+                        if len(active_buf) >= BATCH_SIZE:
+                            insert_batch_active(cur, active_buf)
+                            counts["active"] += len(active_buf)
+                            active_buf.clear()
+                            print(f"  ...{counts['active'] + counts['archive']} rows inserted", flush=True)
 
-                    if len(archive_buf) >= BATCH_SIZE:
-                        insert_batch_archive(cur, archive_buf)
-                        counts["archive"] += len(archive_buf)
-                        archive_buf.clear()
-                        print(f"  ...{counts['active'] + counts['archive']} rows inserted", flush=True)
+                        if len(archive_buf) >= BATCH_SIZE:
+                            insert_batch_archive(cur, archive_buf)
+                            counts["archive"] += len(archive_buf)
+                            archive_buf.clear()
+                            print(f"  ...{counts['active'] + counts['archive']} rows inserted", flush=True)
 
                 if active_buf:
                     insert_batch_active(cur, active_buf)
