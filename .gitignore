@@ -19,6 +19,9 @@ docker/secrets/
 
 # Python
 __pycache__/
+.venv/
+*.pyc
+.pytest_cache/
 
 # OS
 .DS_Store

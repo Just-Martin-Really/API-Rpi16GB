@@ -1,0 +1,9 @@
+.env
+ca.crt
+.venv/
+data/model.keras
+data/scaler.npz
+data/model.tflite
+__pycache__/
+*.pyc
+.pytest_cache/

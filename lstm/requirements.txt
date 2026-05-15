@@ -1,0 +1,11 @@
+# PI-REBUILD: on the Pi, replace `tensorflow` with `tflite-runtime` and do
+# inference only. Training stays on a workstation. Convert model.keras to
+# model.tflite once (see train.py PI-REBUILD note) before deploying.
+tensorflow>=2.16
+numpy
+pandas
+scikit-learn
+plotext
+python-dotenv
+requests
+pytest
