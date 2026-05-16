@@ -23,3 +23,18 @@ CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
     ON actuator_commands (issued_at)
     WHERE sent_at IS NULL;
 GRANT UPDATE ON TABLE actuator_commands TO iot_write_user;
+
+CREATE TABLE IF NOT EXISTS sensor_requests (
+    id          BIGSERIAL    PRIMARY KEY,
+    sensor_id   VARCHAR(64)  NOT NULL,
+    command     VARCHAR(64)  NOT NULL,
+    issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    sent_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_sensor_requests_unsent
+    ON sensor_requests (issued_at)
+    WHERE sent_at IS NULL;
+
+GRANT INSERT, SELECT, UPDATE ON TABLE sensor_requests TO iot_write_user;
+GRANT USAGE, SELECT ON SEQUENCE sensor_requests_id_seq TO iot_write_user;
