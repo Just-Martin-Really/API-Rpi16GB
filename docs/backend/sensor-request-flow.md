@@ -68,6 +68,8 @@ Marks one request as sent. Idempotent: subsequent calls for the same id return `
     3. On successful publish, `POST /api/internal/sensor-requests/sent` to mark the row.
 3. Sleep `ACTUATOR_POLL_SECONDS` (2 s) and repeat.
 
+The poll constant is shared with the actuator drain by design: one tick, both queues. Tuning it changes the worst-case latency for both flows in lockstep.
+
 Errors at any step are logged and the loop continues. The row stays unsent and is retried on the next poll.
 
 ## Pico behaviour
