@@ -4,6 +4,7 @@ const auth = @import("auth.zig");
 const health = @import("handlers/health.zig");
 const sensor = @import("handlers/sensor.zig");
 const actuator = @import("handlers/actuator.zig");
+const sensor_request = @import("handlers/sensor_request.zig");
 const login = @import("handlers/login.zig");
 
 pub fn dispatch(
@@ -59,6 +60,10 @@ pub fn dispatch(
 
         if (std.mem.eql(u8, target, "/api/v1/actuator-command") and method == .POST) {
             return actuator.create(request, allocator, write_db);
+        }
+
+        if (std.mem.eql(u8, target, "/api/v1/sensor-request") and method == .POST) {
+            return sensor_request.create(request, allocator, write_db);
         }
     }
 

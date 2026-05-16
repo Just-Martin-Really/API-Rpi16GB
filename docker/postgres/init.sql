@@ -58,6 +58,23 @@ CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
 GRANT INSERT, SELECT, UPDATE ON TABLE actuator_commands TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE actuator_commands_id_seq TO iot_write_user;
 
+-- Sensor data requests (e.g. emergency "read now") written by the dashboard or
+-- watchdog, consumed by controller.py via the same drain pattern as actuators.
+CREATE TABLE IF NOT EXISTS sensor_requests (
+    id          BIGSERIAL    PRIMARY KEY,
+    sensor_id   VARCHAR(64)  NOT NULL,
+    command     VARCHAR(64)  NOT NULL,
+    issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    sent_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_sensor_requests_unsent
+    ON sensor_requests (issued_at)
+    WHERE sent_at IS NULL;
+
+GRANT INSERT, SELECT, UPDATE ON TABLE sensor_requests TO iot_write_user;
+GRANT USAGE, SELECT ON SEQUENCE sensor_requests_id_seq TO iot_write_user;
+
 -- Archive table: rows older than 7 days are moved here; purged after 3 years
 CREATE TABLE IF NOT EXISTS sensor_data_archive (
     id          BIGINT           PRIMARY KEY,

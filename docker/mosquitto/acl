@@ -1,9 +1,11 @@
-# sensor01: writes its own data topic, reads its actuator commands
+# sensor01: writes its own data topic, reads its actuator commands and read-now requests
 user sensor01
 topic write sensor01/data
 topic read actuator01/data
+topic read sensor01/request
 
-# controller: read all sensor topics, write all actuator topics
+# controller: read all sensor topics, write all actuator topics and sensor requests
 user controller
 topic read sensor01/data
 topic write actuator01/data
+topic write sensor01/request

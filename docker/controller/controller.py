@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 ACTUATOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+SENSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 COMMAND_RE = re.compile(r"^[A-Z0-9_]+$")
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
@@ -161,6 +162,28 @@ def drain_actuator_commands(client):
         print(f"actuator sent: {actuator_id} <- {command} (id={row_id})", flush=True)
 
 
+def drain_sensor_requests(client):
+    data = api_get("/api/internal/sensor-requests")
+    rows = data.get("requests", [])
+    for row in rows:
+        row_id = row["id"]
+        sensor_id = row["sensor_id"]
+        command = row["command"]
+        if not SENSOR_ID_RE.match(sensor_id) or not COMMAND_RE.match(command):
+            print(f"sensor-request skipped invalid row id={row_id}: sensor_id={sensor_id!r} command={command!r}", flush=True)
+            api_post("/api/internal/sensor-requests/sent", {"id": row_id})
+            continue
+        topic = f"{sensor_id}/request"
+        payload = json.dumps({"command": command})
+        info = client.publish(topic, payload, qos=1)
+        info.wait_for_publish(timeout=5)
+        if not info.is_published():
+            print(f"sensor-request publish failed: id={row_id}", flush=True)
+            continue
+        api_post("/api/internal/sensor-requests/sent", {"id": row_id})
+        print(f"sensor-request sent: {sensor_id} <- {command} (id={row_id})", flush=True)
+
+
 def main():
     tls_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     tls_ctx.load_verify_locations("/run/secrets/ca_cert")
@@ -179,6 +202,10 @@ def main():
             drain_actuator_commands(client)
         except Exception as e:
             print(f"actuator drain error: {e}", flush=True)
+        try:
+            drain_sensor_requests(client)
+        except Exception as e:
+            print(f"sensor-request drain error: {e}", flush=True)
         time.sleep(ACTUATOR_POLL_SECONDS)
 
 
