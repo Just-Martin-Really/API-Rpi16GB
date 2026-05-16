@@ -124,6 +124,41 @@ Rows whose `actuator_id` or `command` fail the regex are accepted by the API but
 
 ---
 
+## POST /api/v1/sensor-request
+
+Queues a request for a sensor to publish a fresh reading. The controller service picks it up within ~2 seconds and publishes it to the sensor's MQTT topic (`<sensor_id>/request`). The Pico, on receiving `READ_NOW`, reads the DHT22 and publishes the values on `<sensor_id>/data` as usual.
+
+Used by the dashboard or a watchdog to force a fresh reading when periodic data has not arrived within its expected cadence. The request itself does not wait for the reading; the caller polls `GET /api/v1/sensor-data` for the new row, or watches the broker.
+
+**Request body**
+```json
+{
+  "sensor_id": "sensor01",
+  "command": "READ_NOW"
+}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `sensor_id` | string | yes | max 64 chars, must match `^[A-Za-z0-9_-]+$` to be dispatched by the controller |
+| `command` | string | yes | max 64 chars, must match `^[A-Z0-9_]+$` to be dispatched; current commands: `READ_NOW` |
+
+Rows whose `sensor_id` or `command` fail the regex are accepted by the API but skipped (and marked sent) by the controller to prevent MQTT topic injection from DB content.
+
+**Response 201**
+```json
+{"queued": true}
+```
+
+**Response 400** when fields are missing or invalid:
+```json
+{"error": "invalid json"}
+```
+
+See [Sensor Request Flow](sensor-request-flow.md) for the end-to-end path and the emergency-shutdown pattern this endpoint enables.
+
+---
+
 ## Database Schema
 
 ```sql
@@ -138,6 +173,14 @@ CREATE TABLE sensor_data (
 CREATE TABLE actuator_commands (
     id          BIGSERIAL    PRIMARY KEY,
     actuator_id VARCHAR(64)  NOT NULL,
+    command     VARCHAR(64)  NOT NULL,
+    issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    sent_at     TIMESTAMPTZ           -- NULL until the controller dispatches it
+);
+
+CREATE TABLE sensor_requests (
+    id          BIGSERIAL    PRIMARY KEY,
+    sensor_id   VARCHAR(64)  NOT NULL,
     command     VARCHAR(64)  NOT NULL,
     issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     sent_at     TIMESTAMPTZ           -- NULL until the controller dispatches it
