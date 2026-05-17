@@ -394,6 +394,59 @@ Three compose-level details make this work:
 
 8. Bring up the daemon: `docker compose up -d lstm`. Watch with `docker compose logs -f lstm`.
 
+### Day-to-day operations
+
+All commands run from `~/API-Rpi16GB/docker` on the 16GB Pi.
+
+**Start, stop, restart the daemon.**
+
+```sh
+docker compose up -d lstm        # start (or recreate if config changed)
+docker compose stop lstm         # stop, container stays
+docker compose start lstm        # start a stopped container
+docker compose restart lstm      # quick restart
+```
+
+**Watch logs.** Each iteration prints a `forecast …` line and either a `sent: …` / `DRY-RUN …` line or `no change, nothing to send`.
+
+```sh
+docker compose logs -f lstm           # tail live
+docker compose logs --tail 100 lstm   # last 100 lines, no follow
+```
+
+**Run one iteration on demand** (handy for sanity-checking after a code or model change):
+
+```sh
+docker compose run --rm lstm python control_loop.py --once --dry-run   # no DB writes
+docker compose run --rm lstm python control_loop.py --once             # real POST
+```
+
+**See what commands the LSTM has issued.** Filter by `issued_by='machine'` to ignore manual dashboard commands.
+
+```sh
+docker compose exec postgres psql -U postgres -d sensor -c "SELECT id, actuator_id, command, issued_at FROM actuator_commands WHERE issued_by='machine' ORDER BY id DESC LIMIT 20;"
+```
+
+**See what data is in the forecast window.** The control loop pulls the latest 240 rows where `unit='C'`, mixing all sensor IDs. Use this to check the real-sensor vs synthetic-data ratio.
+
+```sh
+docker compose exec postgres psql -U postgres -d sensor -c "SELECT sensor_id, COUNT(*) FROM (SELECT sensor_id FROM sensor_data WHERE unit='C' ORDER BY recorded_at DESC LIMIT 240) s GROUP BY sensor_id;"
+```
+
+**Wipe seeded demo rows.** Demo rows from the seeder are tagged `sensor_id LIKE 'demo-%'` and are safe to delete once the real Pico has produced enough history (~240 minutes at 1 row/min).
+
+```sh
+docker compose exec postgres psql -U postgres -d sensor -c "DELETE FROM sensor_data WHERE sensor_id LIKE 'demo-%'; DELETE FROM sensor_data_archive WHERE sensor_id LIKE 'demo-%';"
+```
+
+**Reseed synthetic data** if you blew away the real data or want to test with a known signal. Run the seeder via the `tools` compose profile.
+
+```sh
+docker compose --profile tools run --rm seeder --rows 10080 --days 7
+```
+
+Density matters: the model was trained on 1-minute-spaced samples, so seed at roughly 1 row per minute (10080 rows / 7 days). Denser seeding compresses the 240-row window into a shorter wall-clock span and the forecast degrades.
+
 ### Retrain and redeploy
 
 ```sh
