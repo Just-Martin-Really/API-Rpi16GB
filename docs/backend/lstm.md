@@ -327,7 +327,7 @@ The control loop runs as a Docker service alongside `postgres`, `backend`, `ngin
 ```Dockerfile
 FROM python:3.12-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 libhdf5-103-1 \
+    && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY lstm/requirements.txt ./requirements.txt
