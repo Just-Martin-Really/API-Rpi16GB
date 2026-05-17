@@ -18,9 +18,30 @@ GRANT DELETE ON TABLE sensor_data TO iot_write_user;
 GRANT SELECT, INSERT, DELETE ON TABLE sensor_data_archive TO iot_write_user;
 GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
 
+ALTER TABLE actuator_commands ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
+    ON actuator_commands (issued_at)
+    WHERE sent_at IS NULL;
+GRANT UPDATE ON TABLE actuator_commands TO iot_write_user;
+
+CREATE TABLE IF NOT EXISTS sensor_requests (
+    id          BIGSERIAL    PRIMARY KEY,
+    sensor_id   VARCHAR(64)  NOT NULL,
+    command     VARCHAR(64)  NOT NULL,
+    issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    sent_at     TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_sensor_requests_unsent
+    ON sensor_requests (issued_at)
+    WHERE sent_at IS NULL;
+
+GRANT INSERT, SELECT, UPDATE ON TABLE sensor_requests TO iot_write_user;
+GRANT USAGE, SELECT ON SEQUENCE sensor_requests_id_seq TO iot_write_user;
+
 -- Add issued_by to distinguish who created an actuator command.
--- 'user'    = manual command from dashboard/API
--- 'machine' = automatic command from LSTM/controller logic
+-- 'user'    = manual command from dashboard or API
+-- 'machine' = automatic command from LSTM or controller logic
 
 ALTER TABLE actuator_commands
     ADD COLUMN IF NOT EXISTS issued_by VARCHAR(16) NOT NULL DEFAULT 'user';

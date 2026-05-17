@@ -165,7 +165,7 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
-      API_BASE_URL: https://nginx
+      API_BASE_URL: https://nginx:8443
     secrets:
       - mqtt_controller_user
       - mqtt_controller_password

@@ -70,7 +70,7 @@ Security is enforced at multiple independent layers, so a failure or bypass of a
 ### Least Privilege
 - `iot_write_user`: internal backend database user with restricted write access to application tables.
 - `iot_read_user`: `SELECT` on `sensor_data` and `dashboard_users` only.
-- MQTT: `sensor01` can only publish to `sensor01/data`. `controller` can subscribe to sensor topics and publish actuator topics according to the ACL.
+- MQTT: `sensor01` can publish to `sensor01/data` and subscribe to `actuator01/data` (so the Pico receives relay commands). `controller` can subscribe to sensor topics and publish actuator topics. Both restricted by the broker ACL.
 - The controller does not receive database credentials. It only receives MQTT credentials and API credentials.
 - Containers are designed to avoid unnecessary privileges and do not use `--privileged`.
 - nginx forwards only `/health`, `/auth/`, and `/api/` — all other paths are dropped.

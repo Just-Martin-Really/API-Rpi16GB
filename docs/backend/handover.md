@@ -66,7 +66,7 @@ JWT-Implementierung in Zig (HS256, 24h TTL) ohne externe Bibliothek:
 
 ### Schritt 7 — Mosquitto und Controller (untracked: `docker/controller/`, `docker/mosquitto/`)
 
-- Mosquitto MQTT Broker mit TLS auf Port 8883, kein Anonymous-Zugang, ACL pro Sensor: `sensor01` darf nur auf `sensor01/data` schreiben, `controller` darf `sensor+/data` lesen und `actuator+/data` schreiben
+- Mosquitto MQTT Broker mit TLS auf Port 8883, kein Anonymous-Zugang, ACL pro Sensor: `sensor01` darf auf `sensor01/data` schreiben und `actuator01/data` lesen (für den Empfang der Relay-Befehle); `controller` darf `sensor+/data` lesen und `actuator+/data` schreiben
 - `controller.py`: abonniert alle Sensor-MQTT-Topics → schreibt in DB; pollt `actuator_commands` alle 2 Sekunden → publiziert per MQTT an die Aktoren, setzt `sent_at`
 
 ### Schritt 8 — ModSecurity-WAF + OWASP Core Rule Set (Kap4 4.2)
@@ -75,7 +75,7 @@ nginx läuft nicht mehr als plain `nginx:alpine`, sondern als `owasp/modsecurity
 
 Die alte `docker/nginx/nginx.conf` wurde entfernt, weil das Image eine eigene top-level `nginx.conf` mit dem ModSecurity-Modul-Load mitbringt. Die Projekt-Anpassungen liegen jetzt unter:
 
-- `docker/nginx/templates/conf.d/default.conf.template`: eigener Server-Block (TLS 1.2/1.3, Rate Limiting, Subnet-Whitelist, `/health` `/auth/` `/api/`-Locations, `modsecurity on;`)
+- `docker/nginx/templates/conf.d/default.conf.template`: eigener Server-Block (TLS 1.2/1.3, Rate Limiting, Subnet-Whitelist, `/healthz` (Loopback-only, ModSec aus, für den Container-Healthcheck), `/health` `/auth/` `/api/`-Locations, `modsecurity on;`)
 - `docker/nginx/modsec/main.conf`: Include-Kette aus Image-Basis-Config, OWASP CRS, eigene Regeln, eigene FP-Exclusions
 - `docker/nginx/modsec/custom-rules.conf`: Demo-Regel `id:1000` aus Kap4 4-19 (XSS-Filter auf `REQUEST_URI`)
 - `docker/nginx/modsec/exclusions.conf`: Platzhalter für CRS-False-Positive-Exclusions

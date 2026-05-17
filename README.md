@@ -296,37 +296,62 @@ Rows are split based on their generated `recorded_at`:
 Both tables are populated in a single transaction; no need to wait for the
 archiver to fire.
 
+### Realistic value generation
+
+For each sensor, the seeder spreads rows evenly across the time window and
+walks values forward chronologically. Each reading is the previous reading
+plus a small mean-reverting random step, hard-capped at `max_delta_per_min`
+per minute. A 60-second gap between samples can therefore never produce
+more than that much change, so the data looks like a real room (slow drift
+around a steady mean) instead of independent random samples.
+
+Defaults assume a normally heated room: temp around 21.5 °C, humidity
+around 45 %, max temp change capped at 0.25 °C per minute. Humidity uses
+a wider cap internally because humidity moves faster than temperature.
+
 ### Anomalies
 
-Every Nth row (default 500) is generated as an "anomaly" with a clearly
-out-of-range value (e.g. ~40 °C for temp sensors), simulating a malfunctioning
-sensor. Disable with `--anomaly-rate 0`.
+A configurable percentage of rows is forced to `mean + anomaly_magnitude`,
+bypassing the per-minute cap on purpose so the spike is visibly anomalous.
+The next non-anomaly reading walks back from the spike rather than
+teleporting straight back to the mean.
+
+Two flags control this:
+- `--anomaly-percent` sets how much of the data is corrupted (0 disables).
+- `--anomaly-magnitude` sets how far an anomaly is from the sensor's mean,
+  in the sensor's own unit. Use a negative value for cold-side anomalies.
 
 ### Usage
 
 From `docker/` on the Pi:
 
 ```sh
-# defaults: 10 000 rows over the last 30 days, sensors demo-temp-01 + demo-humid-01
+# defaults: 10 000 rows over 30 days, 0.5% anomalies at +15 from mean
 docker compose --profile tools run --rm seeder
 
 # stress-test the archive purge with > 3 years of data
 docker compose --profile tools run --rm seeder --rows 200000 --days 1100
 
-# multiple sensors, denser anomalies
+# multiple sensors, heavier corruption (5% of rows are anomalies)
 docker compose --profile tools run --rm seeder \
     --sensors demo-temp-01,demo-temp-02,demo-humid-01 \
-    --rows 50000 --anomaly-rate 100
+    --rows 50000 --anomaly-percent 5
+
+# clean run with no anomalies and tighter per-minute realism
+docker compose --profile tools run --rm seeder --anomaly-percent 0 --max-delta-per-min 0.1
 ```
 
 ### CLI options
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--rows N`         | `10000` | total rows to insert |
-| `--days N`         | `30`    | spread `recorded_at` across the last N days |
-| `--sensors a,b,c`  | `demo-temp-01,demo-humid-01` | sensor IDs to generate for |
-| `--anomaly-rate N` | `500`   | one anomaly every N rows; `0` disables |
+| `--rows N`              | `10000` | total rows to insert |
+| `--days N`              | `30`    | spread `recorded_at` across the last N days |
+| `--sensors a,b,c`       | `demo-temp-01,demo-humid-01` | sensor IDs to generate for |
+| `--anomaly-percent P`   | `0.5`   | percentage of rows that are anomalies; `0` disables |
+| `--anomaly-magnitude M` | `15.0`  | how far an anomaly deviates from the mean, in the sensor's unit |
+| `--max-delta-per-min F` | `0.25`  | cap on per-minute change for temp sensors (humidity scaled internally) |
 
-Sensor IDs are classified by name: `*temp*` → °C readings around 22 °C,
-`*humid*` → % readings around 45 %, anything else → unitless 0–100 range.
+Sensor IDs are classified by name: `*temp*` produces °C readings around
+21.5 °C, `*humid*` produces % readings around 45 %, anything else produces
+unitless values around 50.
