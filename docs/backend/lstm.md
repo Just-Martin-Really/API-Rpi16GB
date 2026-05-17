@@ -13,7 +13,17 @@ The model itself is shared: a 2-layer LSTM with dropout, trained 1-step-ahead on
 2. `forecast.py` loads both artifacts, pulls the latest 240 values, and prints the forecast plus a terminal plot. Use after training to eyeball model quality.
 3. `control_loop.py` runs forever: pull window, forecast `LOOKAHEAD` minutes, decide heater or cooler state, POST changed commands to the backend, sleep, repeat.
 
-## Default path: train and forecast
+## Where things run
+
+| Component | Where | How |
+|---|---|---|
+| Training (`train.py`) | Workstation (Mac) | Local Python 3.12 venv. Produces `data/model.keras` + `data/scaler.npz`. |
+| Forecast smoke test (`forecast.py`, `evaluate.py`) | Workstation (Mac) | Same venv. Useful after retraining. |
+| Control loop (`control_loop.py`) | 16GB Pi | Docker service in the backend compose stack. |
+
+Artifacts move from workstation to Pi via git: `data/model.keras` and `data/scaler.npz` are committed (small, ~640KB total) and `COPY`'d into the `lstm` image at build time. Retrain locally, commit the new artifacts, `git pull` on the Pi, `docker compose build lstm`, restart the service.
+
+## Local development (workstation)
 
 ```sh
 cd API-Rpi16GB/lstm
@@ -59,7 +69,7 @@ Reads a chronologically ordered CSV at `CSV_PATH` and takes the `CSV_COLUMN` col
 
 ## Configuration
 
-`lstm/.env.example` is the source of truth; copy to `lstm/.env` and fill in.
+Production values are set in the `lstm` service block of `docker/docker-compose.yml`. The values below are for local development on a workstation; copy `lstm/.env.example` to `lstm/.env` and fill in.
 
 ```
 # ── API access ────────────────────────────────────────────────────────────────
@@ -90,11 +100,11 @@ echo "<strong password>" > docker/secrets/dashboard_lstm_password.txt
 docker/set_passwords.sh
 ```
 
-`set_passwords.sh` updates `dashboard_users.password_sha256` for the `lstm` row. Put the matching password into the file referenced by `LSTM_PASS_FILE` on the workstation running the LSTM scripts.
+`set_passwords.sh` updates `dashboard_users.password_sha256` for the `lstm` row. The same secret file is mounted into the `lstm` container at `/run/secrets/dashboard_lstm_password`. For local-workstation development put the matching password into the file referenced by `LSTM_PASS_FILE` in `lstm/.env`.
 
 ### CA cert
 
-`API_CA_CERT` points at the lab CA certificate that signed the nginx server cert. A copy lives at `lstm/ca.crt` and is gitignored on principle. Replace with your own copy if needed.
+`API_CA_CERT` points at the lab CA certificate that signed the nginx server cert. In the Pi container it is mounted at `/run/secrets/ca_cert` via the existing `ca_cert` compose secret. For local development a copy lives at `lstm/ca.crt` and is gitignored on principle.
 
 ## Network model
 
@@ -128,10 +138,10 @@ lstm/
   evaluate.py         holdout MAE + RMSE
   requirements.txt
   .env.example        template for .env (gitignored)
-  .gitignore          ignores .env, ca.crt, lstm_password.txt, data/* artifacts
+  .gitignore          ignores .env, ca.crt, lstm_password.txt, .venv, temps.csv, tflite artifact
   data/
-    model.keras       trained model (gitignored)
-    scaler.npz        scaler mean + scale (gitignored)
+    model.keras       trained model (committed; baked into the lstm image)
+    scaler.npz        scaler mean + scale (committed; baked into the lstm image)
     temps.csv         optional CSV input (gitignored)
   tests/
     test_lstm.py      unit tests for sequence builder + scaler roundtrip
@@ -302,27 +312,107 @@ The model is trained 1-step ahead and forecasts by feeding predictions back. Err
 ## Limits and known issues
 
 - **Effective API training window is 7 days** because of the archiver.
-- **TensorFlow image size** is roughly 500 MB. Fine on a workstation, not viable inside the Pi controller container without TFLite.
+- **Image is heavy.** Full TensorFlow on `python:3.12-slim` lands around 1.3GB. Acceptable on the 16GB Pi but the first build takes 5-10 minutes.
 - **Single-window `evaluate.py`** is informational, not a rolling backtest.
-- **No automatic retraining**. Operator runs `python train.py` manually.
+- **No automatic retraining**. Operator runs `python train.py` manually on a workstation, commits the new artifacts, and rebuilds the Pi image.
 
-## Pi rebuild path
+## Production deployment on the 16GB Pi
 
-When the model is ready to run live inside the controller container on the Pi, do not move full TensorFlow onto the Pi. The intended path:
+The control loop runs as a Docker service alongside `postgres`, `backend`, `nginx`, `controller`, `mosquitto`, `archiver`, `webserver`. It pulls sensor data from the backend over the internal compose network and posts actuator commands the same way the dashboard does.
 
-1. Train on a workstation as today.
-2. Export to TFLite at the end of `train.py`:
+### Service definition
 
-   ```python
-   converter = tf.lite.TFLiteConverter.from_keras_model(model)
-   open(DATA_DIR / "model.tflite", "wb").write(converter.convert())
+`docker/lstm/Dockerfile`:
+
+```Dockerfile
+FROM python:3.12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 libhdf5-103-1 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY lstm/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY lstm/ ./
+CMD ["python", "control_loop.py"]
+```
+
+`docker/docker-compose.yml` (excerpt):
+
+```yaml
+lstm:
+  build:
+    context: ..
+    dockerfile: docker/lstm/Dockerfile
+  restart: unless-stopped
+  environment:
+    API_BASE_URL: https://backend.lab.local:8443
+    API_CA_CERT: /run/secrets/ca_cert
+    LSTM_USER: lstm
+    LSTM_PASS_FILE: /run/secrets/dashboard_lstm_password
+    DATA_SOURCE: api
+    TARGET_LOW: "19.0"
+    TARGET_HIGH: "23.0"
+    LOOKAHEAD: "30"
+    LOOP_SECONDS: "60"
+    ACTUATOR_HEATER_ID: heater01
+    ACTUATOR_COOLER_ID: cooler01
+  secrets:
+    - ca_cert
+    - dashboard_lstm_password
+  networks:
+    - app-net
+  depends_on:
+    nginx:
+      condition: service_healthy
+```
+
+Three compose-level details make this work:
+
+- The `dashboard_lstm_password` secret is declared at the top of `docker-compose.yml` pointing at `./secrets/dashboard_lstm_password.txt`. The file is gitignored; create it on the Pi before bringing the service up.
+- The `nginx` service has a network alias `backend.lab.local` so the TLS hostname matches the cert CN. The `lstm` service hits `https://backend.lab.local:8443`, Docker DNS resolves it to the nginx container, and certificate verification against `ca_cert` passes.
+- The `nginx` service has a TCP healthcheck (`nc -z 127.0.0.1 8443`), and `lstm` waits for `condition: service_healthy` before starting. This avoids spurious login failures on `docker compose up` from racing nginx's TLS init. The daemon's per-iteration `try/except` is still there as a backstop for transient network blips later, but cold-start races are no longer one of them.
+
+### First-time setup on the Pi
+
+1. Train on a workstation: `cd lstm && python train.py`. This writes `data/model.keras` and `data/scaler.npz`.
+2. Commit and push: `git add lstm/data/model.keras lstm/data/scaler.npz && git commit -m "chore(lstm): retrain artifacts" && git push`.
+3. On the Pi: `git pull`.
+4. Set the LSTM service password (same value goes into the secret file and into `dashboard_users.password_sha256`):
+
+   ```sh
+   echo "<strong password>" > docker/secrets/dashboard_lstm_password.txt
+   docker/set_passwords.sh
    ```
 
-3. On the Pi, install `tflite-runtime` (small, ARM wheels exist) instead of `tensorflow`. Replace `load_artifacts` and `forecast` in `forecast.py` to use `tflite_runtime.interpreter.Interpreter`.
-4. Bake `model.tflite` and `scaler.npz` into a new `lstm-controller` image, or mount them as a volume.
-5. Set `API_BASE_URL=https://nginx`, `API_CA_CERT=/run/secrets/ca_cert`, `LSTM_PASS_FILE=/run/secrets/dashboard_lstm_password` inside the container.
+5. Build the image: `cd docker && docker compose build lstm`. First build is slow because the TensorFlow wheel is large.
+6. Smoke test, dry run: `docker compose run --rm lstm python control_loop.py --once --dry-run`. Logs should show a forecast band and either `DRY-RUN would POST` or `no change, nothing to send`.
+7. Smoke test, real POST: `docker compose run --rm lstm python control_loop.py --once`. Verify the row landed:
 
-Each file that needs to change carries a `PI-REBUILD:` comment block at the top.
+   ```sh
+   docker compose exec postgres psql -U postgres -d sensor -c "SELECT id, actuator_id, command, issued_by, issued_at FROM actuator_commands ORDER BY id DESC LIMIT 5;"
+   ```
+
+8. Bring up the daemon: `docker compose up -d lstm`. Watch with `docker compose logs -f lstm`.
+
+### Retrain and redeploy
+
+```sh
+# on workstation
+cd lstm && python train.py
+git add data/model.keras data/scaler.npz
+git commit -m "chore(lstm): retrain on N days of data"
+git push
+
+# on Pi
+git pull
+cd docker
+docker compose build lstm
+docker compose up -d lstm
+```
+
+### Resource notes
+
+The `python:3.12-slim` base plus TensorFlow lands around 1.3GB on disk. RAM at runtime is roughly 300-500MB. The 16GB Pi has the headroom; the build itself is the slow part (5-10 minutes on the Pi).
 
 ## Reference
 

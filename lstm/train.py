@@ -3,11 +3,6 @@ from pathlib import Path
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-# PI-REBUILD: training stays on a workstation. On the Pi, do not import
-# tensorflow at all; instead, after training here, export to TFLite:
-#   converter = tf.lite.TFLiteConverter.from_keras_model(model)
-#   open("data/model.tflite", "wb").write(converter.convert())
-# and load on the Pi with tflite_runtime.interpreter.Interpreter.
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input

@@ -2,8 +2,7 @@
 ca.crt
 lstm_password.txt
 .venv/
-data/model.keras
-data/scaler.npz
+data/temps.csv
 data/model.tflite
 __pycache__/
 *.pyc

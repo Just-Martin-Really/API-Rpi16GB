@@ -2,8 +2,6 @@ from pathlib import Path
 
 import numpy as np
 
-# PI-REBUILD: same swap as forecast.py if you want to evaluate on the Pi.
-# Easier to just evaluate on the workstation before deploying.
 import tensorflow as tf
 
 from data_source import load_temperatures

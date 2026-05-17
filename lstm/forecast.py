@@ -14,13 +14,6 @@ from pathlib import Path
 import numpy as np
 import plotext as plt
 
-# PI-REBUILD: on the Pi, install tflite-runtime and replace the
-# load_artifacts() body with:
-#   from tflite_runtime.interpreter import Interpreter
-#   interpreter = Interpreter(str(DATA_DIR / "model.tflite"))
-#   interpreter.allocate_tensors()
-# Then rewrite forecast() to use interpreter.set_tensor / invoke / get_tensor
-# instead of model.predict.
 import tensorflow as tf
 
 from data_source import load_temperatures
