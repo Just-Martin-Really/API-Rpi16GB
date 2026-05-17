@@ -52,3 +52,9 @@ ALTER TABLE actuator_commands
 ALTER TABLE actuator_commands
     ADD CONSTRAINT chk_actuator_commands_issued_by
     CHECK (issued_by IN ('user', 'machine'));
+
+-- Service account for the LSTM control loop. Password is 'changeme'; rotate via
+-- set_passwords.sh before going live.
+INSERT INTO dashboard_users (username, password_sha256)
+VALUES ('lstm', encode(sha256('changeme'::bytea), 'hex'))
+ON CONFLICT (username) DO NOTHING;
