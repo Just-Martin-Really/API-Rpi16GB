@@ -9,7 +9,7 @@ pub fn getAll(request: *std.http.Server.Request, allocator: std.mem.Allocator, d
     );
     defer db.clearResult(result);
 
-    var buf: std.ArrayList(u8) = .{};
+    var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
 
     try buf.append(allocator, '[');
