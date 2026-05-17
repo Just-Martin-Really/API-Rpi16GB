@@ -10,7 +10,8 @@ from train import SEQ_LENGTH, create_sequences
 
 
 def test_create_sequences_shapes():
-    data = np.arange(100, dtype=float).reshape(-1, 1)
+    n = SEQ_LENGTH + 60
+    data = np.arange(n, dtype=float).reshape(-1, 1)
     X, y = create_sequences(data, SEQ_LENGTH)
     assert X.shape == (60, SEQ_LENGTH, 1)
     assert y.shape == (60, 1)
