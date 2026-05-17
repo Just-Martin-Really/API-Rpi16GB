@@ -67,7 +67,7 @@ def _from_api():
         raise SystemExit("API returned no sensor data")
     df = df[df["unit"] == "C"].copy()
     df["value"] = df["value"].astype(float)
-    df["recorded_at"] = pd.to_datetime(df["recorded_at"])
+    df["recorded_at"] = pd.to_datetime(df["recorded_at"], format="ISO8601")
     df = df.sort_values("recorded_at")
     if DAYS is not None:
         cutoff = df["recorded_at"].max() - pd.Timedelta(days=DAYS)
