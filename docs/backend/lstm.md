@@ -140,7 +140,36 @@ lstm/
 
 ## Control loop
 
-`control_loop.py` is the live integration of the model. One iteration:
+The control loop never talks to the controller directly. The two are decoupled by `actuator_commands` in postgres, the same table the dashboard uses:
+
+```
+sensor01 ──── MQTT ────► mosquitto ──── webserver ────► sensor_data
+                                                            │
+                                                            │ GET /api/v1/sensor-data
+                                                            │ (JWT bearer, as 'lstm' user)
+                                                            ▼
+                                            ┌──────────────────────────────┐
+                                            │   lstm/control_loop.py       │
+                                            │                              │
+                                            │   1. pull last 240 minutes   │
+                                            │   2. model.predict(window)   │
+                                            │   3. decide(forecast)        │
+                                            │   4. diff(last_state)        │
+                                            └──────────────────────────────┘
+                                                            │
+                                                            │ POST /api/v1/actuator-command
+                                                            │ {issued_by: "machine"}
+                                                            ▼
+                                                   actuator_commands
+                                                            │
+                                                            │ poll every 2s
+                                                            ▼
+                                            controller.py ──── MQTT ────► Pico (heater/cooler)
+```
+
+The LSTM is one of several command sources. Dashboard buttons and operator scripts (`scripts/heater.sh`, `scripts/cooler.sh`) write to the same table with `issued_by='user'`. `controller.py` drains them all identically, so the LSTM does not need any controller-side changes to take effect; it just inserts rows. `issued_by` is purely for auditing which source produced which command.
+
+One iteration of the loop:
 
 1. Pull the latest `SEQ_LENGTH=240` temperature values via `data_source.load_temperatures()`.
 2. Forecast `LOOKAHEAD` minutes ahead.
