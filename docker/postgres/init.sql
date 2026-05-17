@@ -42,8 +42,8 @@ ON CONFLICT DO NOTHING;
 
 GRANT SELECT ON TABLE dashboard_users TO iot_read_user;
 
--- Actuator commands written by the dashboard, consumed by controller.py
--- Added issued_by to distinguish between user and lstm commands - need to add variable for lstm commands
+-- Actuator commands written by the dashboard or by automated controllers,
+-- consumed by controller.py. issued_by distinguishes the source.
 CREATE TABLE IF NOT EXISTS actuator_commands (
     id          BIGSERIAL    PRIMARY KEY,
     actuator_id VARCHAR(64)  NOT NULL,
