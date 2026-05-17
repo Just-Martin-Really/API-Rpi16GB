@@ -43,19 +43,24 @@ ON CONFLICT DO NOTHING;
 GRANT SELECT ON TABLE dashboard_users TO iot_read_user;
 
 -- Actuator commands written by the dashboard, consumed by controller.py
+-- Added issued_by to distinguish between user and lstm commands - need to add variable for lstm commands
 CREATE TABLE IF NOT EXISTS actuator_commands (
     id          BIGSERIAL    PRIMARY KEY,
     actuator_id VARCHAR(64)  NOT NULL,
     command     VARCHAR(64)  NOT NULL,
+    issued_by   VARCHAR(16)  NOT NULL DEFAULT 'user',
     issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    sent_at     TIMESTAMPTZ
+    sent_at     TIMESTAMPTZ,
+
+    CONSTRAINT chk_actuator_commands_issued_by
+        CHECK (issued_by IN ('user', 'machine'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
     ON actuator_commands (issued_at)
     WHERE sent_at IS NULL;
 
-GRANT INSERT, SELECT ON TABLE actuator_commands TO iot_write_user;
+GRANT INSERT, SELECT, UPDATE ON TABLE actuator_commands TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE actuator_commands_id_seq TO iot_write_user;
 
 -- Archive table: rows older than 7 days are moved here; purged after 3 years

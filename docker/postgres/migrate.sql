@@ -17,3 +17,17 @@ CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON sensor_data_archive (archi
 GRANT DELETE ON TABLE sensor_data TO iot_write_user;
 GRANT SELECT, INSERT, DELETE ON TABLE sensor_data_archive TO iot_write_user;
 GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
+
+-- Add issued_by to distinguish who created an actuator command.
+-- 'user'    = manual command from dashboard/API
+-- 'machine' = automatic command from LSTM/controller logic
+
+ALTER TABLE actuator_commands
+    ADD COLUMN IF NOT EXISTS issued_by VARCHAR(16) NOT NULL DEFAULT 'user';
+
+ALTER TABLE actuator_commands
+    DROP CONSTRAINT IF EXISTS chk_actuator_commands_issued_by;
+
+ALTER TABLE actuator_commands
+    ADD CONSTRAINT chk_actuator_commands_issued_by
+    CHECK (issued_by IN ('user', 'machine'));
