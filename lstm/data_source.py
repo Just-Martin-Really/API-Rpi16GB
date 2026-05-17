@@ -10,10 +10,10 @@ from pathlib import Path
 import numpy as np
 
 # ---- knobs ------------------------------------------------------------------
+# "api" : pull from the backend API using the LSTM service account (default).
 # "sim" : two-sine-wave synthetic temperature trace (slide 5-31). No setup.
 # "csv" : read CSV_PATH, take the CSV_COLUMN column.
-# "api" : pull from the backend API (requires lstm/.env).
-SOURCE = "sim"
+SOURCE = os.environ.get("DATA_SOURCE", "api")
 
 # Simulated source.
 SIM_MINUTES = 10000
@@ -24,7 +24,9 @@ CSV_PATH = Path(__file__).parent / "data" / "temps.csv"
 CSV_COLUMN = "temperature"
 
 # API source. Effective only when SOURCE == "api".
-DAYS = 7
+# How many days of history to keep. The backend archives rows older than 7
+# days, so values above 7 are silently capped at whatever the API returns.
+DAYS = int(os.environ.get("API_DAYS", "7"))
 # -----------------------------------------------------------------------------
 
 
@@ -56,21 +58,13 @@ def _from_csv():
 
 def _from_api():
     import pandas as pd
-    import requests
-    from dotenv import load_dotenv
 
-    load_dotenv(Path(__file__).parent / ".env")
-    base = os.environ["API_BASE_URL"]
-    key = os.environ["API_KEY"]
-    ca = os.environ["API_CA_CERT"]
-    response = requests.get(
-        f"{base}/api/v1/sensor-data",
-        headers={"x-api-key": key},
-        verify=ca,
-        timeout=30,
-    )
-    response.raise_for_status()
-    df = pd.DataFrame(response.json())
+    from api_client import ApiClient
+
+    rows = ApiClient().get_sensor_data()
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise SystemExit("API returned no sensor data")
     df = df[df["unit"] == "C"].copy()
     df["value"] = df["value"].astype(float)
     df["recorded_at"] = pd.to_datetime(df["recorded_at"])

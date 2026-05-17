@@ -1,3 +1,14 @@
+"""One-shot forecasting smoke test.
+
+Loads the trained model, pulls the latest SEQ_LENGTH temperature window from
+the configured data source, predicts MINUTES ahead, prints the numbers, and
+plots window + forecast in the terminal.
+
+Use this to sanity-check training output before wiring up the control loop.
+The control loop itself (lstm/control_loop.py) reuses forecast() and the
+scale helpers from here.
+"""
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +27,7 @@ from data_source import load_temperatures
 
 SEQ_LENGTH = 240  # must match train.py:SEQ_LENGTH
 ALPHA = 0.0  # forecast smoothing factor from slide 5-35. 0 = raw model.
+DEFAULT_MINUTES = 240
 DATA_DIR = Path(__file__).parent / "data"
 
 
@@ -64,71 +76,26 @@ def plot_forecast(window, fc):
     plt.show()
 
 
-def mode_paste(model, mean, std):
-    print(f"paste {SEQ_LENGTH} comma-separated temperatures, then press enter:")
-    line = input("> ").strip()
-    try:
-        vals = [float(x) for x in line.split(",")]
-    except ValueError as e:
-        print(f"parse error: {e}")
-        return
-    if len(vals) != SEQ_LENGTH:
-        print(f"need exactly {SEQ_LENGTH} values, got {len(vals)}")
-        return
-    minutes = int(input("forecast how many minutes? [240] ") or "240")
-    window = np.array(vals).reshape(-1, 1)
-    fc_scaled = forecast(model, scale(window, mean, std), minutes)
-    fc = unscale(fc_scaled, mean, std)
-    plot_forecast(window, fc)
-    print("forecast:", ", ".join(f"{v:.2f}" for v in fc))
-
-
-def mode_step(model, mean, std):
-    print("seeding window from the configured data source")
-    window = latest_window()
-    print(f"starting window (last 5): {window[-5:].flatten()}")
-    print("enter next observed value each prompt, or 'q' to quit")
-    while True:
-        nxt = input("next value: ").strip()
-        if nxt in ("q", "quit", "exit"):
-            return
-        try:
-            v = float(nxt)
-        except ValueError:
-            print("not a number")
-            continue
-        window = np.vstack([window[1:], [[v]]])
-        fc_scaled = forecast(model, scale(window, mean, std), minutes=30)
-        fc = unscale(fc_scaled, mean, std)
-        plot_forecast(window, fc)
-        print(f"next-minute prediction: {fc[0]:.2f}")
-
-
-def mode_latest(model, mean, std):
-    window = latest_window()
-    minutes = int(input("forecast how many minutes? [240] ") or "240")
-    fc_scaled = forecast(model, scale(window, mean, std), minutes)
-    fc = unscale(fc_scaled, mean, std)
-    plot_forecast(window, fc)
-    print("forecast:", ", ".join(f"{v:.2f}" for v in fc))
-
-
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--minutes", type=int, default=DEFAULT_MINUTES,
+                    help=f"minutes to forecast ahead (default {DEFAULT_MINUTES})")
+    ap.add_argument("--no-plot", action="store_true",
+                    help="suppress the terminal plot (still prints numbers)")
+    args = ap.parse_args()
+
     print("loading model")
     model, mean, std = load_artifacts()
-    print("ready. commands: paste, step, latest, quit")
-    while True:
-        cmd = input("forecast> ").strip().lower()
-        if cmd in ("q", "quit", "exit"):
-            return
-        if cmd == "paste":
-            mode_paste(model, mean, std)
-        elif cmd == "step":
-            mode_step(model, mean, std)
-        elif cmd == "latest":
-            mode_latest(model, mean, std)
-        else:
-            print("unknown command")
+    print("pulling latest window")
+    window = latest_window()
+    print(f"window tail (last 5): {window[-5:].flatten()}")
+    print(f"forecasting {args.minutes} minutes ahead")
+    fc_scaled = forecast(model, scale(window, mean, std), args.minutes)
+    fc = unscale(fc_scaled, mean, std)
+    if not args.no_plot:
+        plot_forecast(window, fc)
+    print("forecast head (first 10):", ", ".join(f"{v:.2f}" for v in fc[:10]))
+    print(f"forecast min/max: {fc.min():.2f} / {fc.max():.2f}")
 
 
 if __name__ == "__main__":
