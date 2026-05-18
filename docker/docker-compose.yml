@@ -185,8 +185,10 @@ services:
       - app-net
       - sensor-net
     depends_on:
-      - nginx
-      - mosquitto
+      nginx:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
 
   # ── Webserver ─────────────────────────────────────────
   webserver:
