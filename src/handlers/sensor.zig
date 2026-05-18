@@ -9,19 +9,15 @@ pub fn getAll(request: *std.http.Server.Request, allocator: std.mem.Allocator, d
     );
     defer db.clearResult(result);
 
-    const buf = try allocator.alloc(u8, 65536);
-    var pos: usize = 0;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
 
-    buf[pos] = '[';
-    pos += 1;
+    try buf.append(allocator, '[');
 
     const nrows = db.numRows(result);
     for (0..nrows) |i| {
-        if (i > 0) {
-            buf[pos] = ',';
-            pos += 1;
-        }
-        const written = try std.fmt.bufPrint(buf[pos..],
+        if (i > 0) try buf.append(allocator, ',');
+        const row = try std.fmt.allocPrint(allocator,
             "{{\"id\":{s},\"sensor_id\":\"{s}\",\"value\":{s},\"unit\":\"{s}\",\"recorded_at\":\"{s}\"}}",
             .{
                 db.getValue(result, i, 0),
@@ -31,13 +27,13 @@ pub fn getAll(request: *std.http.Server.Request, allocator: std.mem.Allocator, d
                 db.getValue(result, i, 4),
             },
         );
-        pos += written.len;
+        defer allocator.free(row);
+        try buf.appendSlice(allocator, row);
     }
 
-    buf[pos] = ']';
-    pos += 1;
+    try buf.append(allocator, ']');
 
-    try request.respond(buf[0..pos], .{
+    try request.respond(buf.items, .{
         .status = .ok,
         .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
     });

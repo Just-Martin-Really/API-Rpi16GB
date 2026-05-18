@@ -38,3 +38,23 @@ CREATE INDEX IF NOT EXISTS idx_sensor_requests_unsent
 
 GRANT INSERT, SELECT, UPDATE ON TABLE sensor_requests TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE sensor_requests_id_seq TO iot_write_user;
+
+-- Add issued_by to distinguish who created an actuator command.
+-- 'user'    = manual command from dashboard or API
+-- 'machine' = automatic command from LSTM or controller logic
+
+ALTER TABLE actuator_commands
+    ADD COLUMN IF NOT EXISTS issued_by VARCHAR(16) NOT NULL DEFAULT 'user';
+
+ALTER TABLE actuator_commands
+    DROP CONSTRAINT IF EXISTS chk_actuator_commands_issued_by;
+
+ALTER TABLE actuator_commands
+    ADD CONSTRAINT chk_actuator_commands_issued_by
+    CHECK (issued_by IN ('user', 'machine'));
+
+-- Service account for the LSTM control loop. Password is 'changeme'; rotate via
+-- set_passwords.sh before going live.
+INSERT INTO dashboard_users (username, password_sha256)
+VALUES ('lstm', encode(sha256('changeme'::bytea), 'hex'))
+ON CONFLICT (username) DO NOTHING;

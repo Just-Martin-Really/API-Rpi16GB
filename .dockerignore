@@ -8,3 +8,14 @@ docker
 zig-cache
 .zig-cache
 zig-out
+
+# LSTM local-dev artifacts that must not be baked into the image
+lstm/.venv
+lstm/.env
+lstm/ca.crt
+lstm/lstm_password.txt
+lstm/__pycache__
+lstm/.pytest_cache
+lstm/tests/__pycache__
+lstm/data/temps.csv
+lstm/data/model.tflite

@@ -87,7 +87,7 @@ def classify(sensor_id: str) -> tuple[str, float, float]:
     """
     name = sensor_id.lower()
     if "temp" in name:
-        return ("°C", 21.5, 0.05)
+        return ("C", 21.5, 0.05)
     if "humid" in name:
         return ("%", 45.0, 0.3)
     return ("u", 50.0, 0.5)

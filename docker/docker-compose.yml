@@ -24,6 +24,8 @@ secrets:
     file: ./secrets/ca_cert.txt
   api_key:
     file: ./secrets/api_key.txt
+  dashboard_lstm_password:
+    file: ./secrets/dashboard_lstm_password.txt
 
 services:
 
@@ -103,7 +105,15 @@ services:
       - /etc/ssl/backend/backend.crt:/etc/nginx/ssl/backend.crt:ro
       - /etc/ssl/backend/backend.key:/etc/nginx/ssl/backend.key:ro
     networks:
-      - app-net
+      app-net:
+        aliases:
+          - backend.lab.local
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
       - backend
 
@@ -196,3 +206,31 @@ services:
       - app-net
     depends_on:
       - postgres
+
+  # ── LSTM control loop (predict + post heater/cooler commands) ─────────────
+  lstm:
+    build:
+      context: ..
+      dockerfile: docker/lstm/Dockerfile
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: https://backend.lab.local:8443
+      API_CA_CERT: /run/secrets/ca_cert
+      LSTM_USER: lstm
+      LSTM_PASS_FILE: /run/secrets/dashboard_lstm_password
+      DATA_SOURCE: api
+      API_DAYS: "7"
+      TARGET_LOW: "19.0"
+      TARGET_HIGH: "23.0"
+      LOOKAHEAD: "30"
+      LOOP_SECONDS: "60"
+      ACTUATOR_HEATER_ID: heater01
+      ACTUATOR_COOLER_ID: cooler01
+    secrets:
+      - ca_cert
+      - dashboard_lstm_password
+    networks:
+      - app-net
+    depends_on:
+      nginx:
+        condition: service_healthy
