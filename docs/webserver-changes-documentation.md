@@ -24,8 +24,8 @@
 | `controller.py`   | Subscribes MQTT, buffers per `sensor_id`, combines temp+humidity, POSTs to `server.js`| API-Key (`x-api-key`header)  |
 | nginx             | Reverse proxy, TLS termination, rate limiting, routes `/api/internal/` to `server.js` | —                            |
 | `server.js`       | Validates payload, writes to PostgreSQL                                               | API-Key                      |
-| Zig backend       | Dashboard API, reads sensor data, manages actuator commands                           | JWT Bearer Token             |
-| PostgreSQL        | Stores `sensor_data`, `actuator_commands`, `dashboard_users`                          | DB user/password             |
+| Zig backend       | Dashboard API, reads sensor data, manages actuator commands                           | Keycloak RS256 Bearer token  |
+| PostgreSQL        | Stores `sensor_data`, `actuator_commands`, `sensor_requests`                          | DB user/password             |
 | archiver          | Moves rows older than 7 days to `sensor_data_archive`, purges after 3 years           | DB user/password             |
 
 ### 2.2 Docker Networks
