@@ -51,7 +51,7 @@ async function initApp() {
       "Keycloak-Bibliothek konnte nicht geladen werden. " +
       "Bitte Netzwerk- und Reverse-Proxy-Konfiguration prüfen."
     );
-    return;
+    return; 
   }
 
   keycloak = new Keycloak(KEYCLOAK_CONFIG);
@@ -133,7 +133,7 @@ function setupUI() {
   const username =
     keycloak.tokenParsed?.preferred_username ||
     keycloak.tokenParsed?.name ||
-    "Unknown";
+    "Unbekannt";
   dom.username.textContent = username;
 
   dom.logoutBtn.addEventListener("click", () => {
@@ -165,7 +165,7 @@ async function loadData() {
   const toValue   = dom.dateTo.value;
 
   if (!fromValue) {
-    showError("Bitte geben Sie ein 'From'-Datum an.");
+    showError("Bitte geben Sie ein 'Von'-Datum an.");
     return;
   }
 
