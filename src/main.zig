@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
     const read_connstr = try std.fmt.bufPrintZ(&read_connstr_buf, "host=postgres port=5432 dbname=sensor user=iot_read_user password={s}", .{read_pw});
 
     const jwks_url = init.environ_map.get("KEYCLOAK_JWKS_URL") orelse
-        "http://keycloak:8080/realms/iot/protocol/openid-connect/certs";
+        "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/certs";
     const issuer = init.environ_map.get("KEYCLOAK_ISSUER") orelse
         "https://www.lab.local/auth/realms/iot";
 

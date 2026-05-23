@@ -98,13 +98,6 @@ echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_write_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_read_password.txt
 
-# Keycloak client secrets for the confidential clients in the iot realm.
-# These values come out of the Keycloak admin console (Clients ->
-# <client> -> Credentials) after the realm import; create empty placeholder
-# files now and overwrite them when Keycloak is up.
-touch ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
-touch ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
-
 # MQTT controller credentials
 echo "controller"                 > ~/API-Rpi16GB/docker/secrets/mqtt_controller_user.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/mqtt_controller_password.txt

@@ -64,7 +64,6 @@ services:
     secrets:
       - db_write_password
       - db_read_password
-      - jwt_secret
     networks:
       - app-net
     depends_on:
