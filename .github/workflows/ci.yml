@@ -41,8 +41,9 @@ jobs:
       - name: Placeholder secrets (build-only)
         run: |
           mkdir -p docker/secrets
-          for f in db_password db_write_password db_read_password jwt_secret \
-                   api_password mqtt_controller_user mqtt_controller_password ca_cert; do
+          for f in db_password db_write_password db_read_password \
+                   mqtt_controller_user mqtt_controller_password ca_cert api_key \
+                   keycloak_db_password keycloak_admin_password keycloak_lstm_secret; do
             touch "docker/secrets/$f.txt"
           done
 

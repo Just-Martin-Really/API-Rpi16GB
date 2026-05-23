@@ -239,6 +239,8 @@ services:
     depends_on:
       nginx:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
 
   # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────
   keycloak-db:

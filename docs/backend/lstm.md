@@ -373,7 +373,7 @@ lstm:
 
 Three compose-level details make this work:
 
-- The `keycloak_lstm_secret` secret is declared at the top of `docker-compose.yml` pointing at `./secrets/keycloak_lstm_secret.txt`. The file is gitignored; populate it on the Pi after bringing Keycloak up by copying the secret out of the admin console.
+- The `keycloak_lstm_secret` secret is declared at the top of `docker-compose.yml` pointing at `./secrets/keycloak_lstm_secret.txt`. The file is gitignored; populate it on the Pi during initial setup with the hardcoded value from `docker/keycloak/iot-realm.json` (currently `sc_lstm_client`, see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)).
 - The `nginx` service has a network alias `www.lab.local` so the TLS hostname matches the cert CN. The `lstm` service hits `https://www.lab.local`, Docker DNS resolves it to the nginx container, and certificate verification against `ca_cert` passes. The token endpoint goes via `http://keycloak:8080` over the internal compose network (no TLS); the access token then travels over TLS to the backend.
 - The `nginx` service has a TCP healthcheck (`nc -z 127.0.0.1 8443`), and `lstm` waits for `condition: service_healthy` before starting. This avoids spurious failures on `docker compose up` from racing nginx's TLS init. The daemon's per-iteration `try/except` is still there as a backstop for transient network blips later, but cold-start races are no longer one of them.
 
@@ -382,10 +382,11 @@ Three compose-level details make this work:
 1. Train on a workstation: `cd lstm && python train.py`. This writes `data/model.keras` and `data/scaler.npz`.
 2. Commit and push: `git add lstm/data/model.keras lstm/data/scaler.npz && git commit -m "chore(lstm): retrain artifacts" && git push`.
 3. On the Pi: `git pull`.
-4. Set the Keycloak client secret. After Keycloak comes up and imports `iot-realm.json`, open the admin console (`https://www.lab.local/auth/admin/`), open the `lstm-client` client, copy the generated secret from the Credentials tab, and put it in the secret file:
+4. Write the Keycloak `lstm-client` secret. The value is hardcoded in `docker/keycloak/iot-realm.json` and the secret file must carry the identical string:
 
    ```sh
-   echo "<keycloak lstm-client secret>" > docker/secrets/keycloak_lstm_secret.txt
+   echo "sc_lstm_client" > docker/secrets/keycloak_lstm_secret.txt
+   chmod 600 docker/secrets/keycloak_lstm_secret.txt
    ```
 
 5. Build the image: `cd docker && docker compose build lstm`. First build is slow because the TensorFlow wheel is large.
