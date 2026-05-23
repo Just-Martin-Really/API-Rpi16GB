@@ -1,3 +1,0 @@
-\idempotent
-
-CREATE DATABASE keycloak;

@@ -14,7 +14,9 @@ Identity-Provider in den bestehenden Docker-Compose-Stack.
 | `docker/secrets/keycloak_db_password.txt` | neu | Datenbankpasswort für `keycloak-db` (gitignored) |
 | `docker/secrets/keycloak_controller_secret.txt` | neu | Client-Secret für `controller-client` (gitignored) |
 | `docker/secrets/keycloak_lstm_secret.txt` | neu | Client-Secret für `lstm-client` (gitignored) |
-| `docker/postgres/create_keycloak_db.sql` | entkoppelt | nicht mehr in Haupt-Postgres eingebunden (Keycloak hat eigene DB-Instanz) |
+| `docker/postgres/create_keycloak_db.sql` | gelöscht | durch `keycloak-db`-Service überflüssig — DB wird automatisch per `POSTGRES_DB` angelegt |
+| `docker/postgres/migrate_to_kc.sql` | gelöscht | doppelter, fehlerhafter Ersatz von `create_keycloak_db.sql` (ungültiges `\idempotent`) |
+| `docker/keycloak/migrate_data_2_kc.sh` | gelöscht | manuelles Setup-Skript, das nur die obigen SQL-Dateien ausgeführt hat — vollständig abgelöst |
 
 ---
 
@@ -289,14 +291,49 @@ curl -s -X POST http://localhost:8080/realms/iot/protocol/openid-connect/token \
 
 ---
 
-## Hinweise zur Migration (`migrate_data_2_kc.sh`)
+## Entfernte Dateien
 
-Das Skript `migrate_data_2_kc.sh` ist durch diese Integration **überholt**:
+Drei Dateien wurden im Zuge dieser Integration gelöscht, weil sie durch den
+dedizierten `keycloak-db`-Service vollständig abgelöst werden.
 
-- Es legt die `keycloak`-Datenbank manuell auf der Haupt-Postgres an.
-- Diese Datenbank liegt jetzt auf `keycloak-db` und wird automatisch beim
-  Containerstart durch `POSTGRES_DB: keycloak` angelegt.
-- Das Skript kann als Referenz behalten oder entfernt werden.
+### `docker/postgres/create_keycloak_db.sql` (gelöscht)
+
+```sql
+CREATE DATABASE keycloak;
+```
+
+Zweck war, die `keycloak`-Datenbank auf der Haupt-Postgres-Instanz anzulegen.
+Nicht mehr nötig: der `keycloak-db`-Service erstellt die Datenbank automatisch
+über `POSTGRES_DB: keycloak` beim ersten Start.
+
+### `docker/postgres/migrate_to_kc.sql` (gelöscht)
+
+```sql
+\idempotent
+
+CREATE DATABASE keycloak;
+```
+
+Inhaltlich identisch mit `create_keycloak_db.sql`, zusätzlich noch fehlerhaft:
+`\idempotent` ist kein gültiges psql-Kommando und hätte in einem echten Run
+einen Fehler geworfen. Ebenfalls obsolet.
+
+### `docker/keycloak/migrate_data_2_kc.sh` (gelöscht)
+
+Das Skript führte nur die beiden SQL-Dateien oben per `docker exec` aus.
+Da beide SQL-Dateien nicht mehr existieren und die Datenbankerstellung
+vollautomatisch erfolgt, ist auch das Skript überflüssig.
+
+**Vorher** (manueller Setup-Schritt nach `docker compose up`):
+```
+docker compose up -d
+./keycloak/migrate_data_2_kc.sh   ← war nötig
+```
+
+**Nachher** (vollautomatisch beim Start):
+```
+docker compose up -d   ← keycloak-db legt DB an, Keycloak importiert Realm
+```
 
 ---
 
