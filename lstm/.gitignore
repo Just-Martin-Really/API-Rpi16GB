@@ -1,6 +1,6 @@
 .env
 ca.crt
-lstm_password.txt
+keycloak_lstm_secret.txt
 .venv/
 data/temps.csv
 data/model.tflite

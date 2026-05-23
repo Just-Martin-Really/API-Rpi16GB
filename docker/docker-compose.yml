@@ -15,8 +15,6 @@ secrets:
     file: ./secrets/db_write_password.txt
   db_read_password:
     file: ./secrets/db_read_password.txt
-  jwt_secret:
-    file: ./secrets/jwt_secret.txt
   mqtt_controller_user:
     file: ./secrets/mqtt_controller_user.txt
   mqtt_controller_password:
@@ -25,12 +23,12 @@ secrets:
     file: ./secrets/ca_cert.txt
   api_key:
     file: ./secrets/api_key.txt
-  dashboard_lstm_password:
-    file: ./secrets/dashboard_lstm_password.txt
   keycloak_db_password:
     file: ./secrets/keycloak_db_password.txt
   keycloak_admin_password:
     file: ./secrets/keycloak_admin_password.txt
+  keycloak_lstm_secret:
+    file: ./secrets/keycloak_lstm_secret.txt
 
 services:
 
@@ -220,10 +218,11 @@ services:
       dockerfile: docker/lstm/Dockerfile
     restart: unless-stopped
     environment:
-      API_BASE_URL: https://backend.lab.local:8443
+      API_BASE_URL: https://www.lab.local
       API_CA_CERT: /run/secrets/ca_cert
-      LSTM_USER: lstm
-      LSTM_PASS_FILE: /run/secrets/dashboard_lstm_password
+      KEYCLOAK_TOKEN_URL: http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token
+      LSTM_CLIENT_ID: lstm-client
+      LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
       DATA_SOURCE: api
       API_DAYS: "7"
       TARGET_LOW: "19.0"
@@ -234,7 +233,7 @@ services:
       ACTUATOR_COOLER_ID: cooler01
     secrets:
       - ca_cert
-      - dashboard_lstm_password
+      - keycloak_lstm_secret
     networks:
       - app-net
     depends_on:

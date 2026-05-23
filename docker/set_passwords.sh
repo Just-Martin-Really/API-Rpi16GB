@@ -6,7 +6,6 @@ set -e
 
 WRITE_PW=$(cat ./secrets/db_write_password.txt)
 READ_PW=$(cat ./secrets/db_read_password.txt)
-LSTM_DASHBOARD_PW=$(cat ./secrets/dashboard_lstm_password.txt)
 MQTT_CTRL_USER=$(cat ./secrets/mqtt_controller_user.txt)
 MQTT_CTRL_PASS=$(cat ./secrets/mqtt_controller_password.txt)
 MQTT_SENSOR01_PASS=$(cat ./secrets/mqtt_sensor01_password.txt)
@@ -16,10 +15,6 @@ docker compose exec postgres psql -U postgres -d sensor \
   -c "ALTER USER iot_write_user WITH PASSWORD '$WRITE_PW';"
 docker compose exec postgres psql -U postgres -d sensor \
   -c "ALTER USER iot_read_user WITH PASSWORD '$READ_PW';"
-
-echo "==> Setting dashboard 'lstm' service account password"
-docker compose exec postgres psql -U postgres -d sensor \
-  -c "UPDATE dashboard_users SET password_sha256 = encode(sha256('$LSTM_DASHBOARD_PW'::bytea), 'hex') WHERE username = 'lstm';"
 
 echo "==> Generating MQTT passwd file"
 # -c creates a fresh file with the first user; -b appends without prompting
