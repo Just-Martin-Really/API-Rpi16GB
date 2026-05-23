@@ -44,19 +44,12 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the backend server");
     run_step.dependOn(&run_cmd.step);
 
-    const auth_mod = b.createModule(.{
+    const auth_test_mod = b.createModule(.{
         .root_source_file = b.path("src/auth.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    const auth_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/auth_test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    auth_test_mod.addImport("auth", auth_mod);
     const auth_tests = b.addTest(.{
         .root_module = auth_test_mod,
     });

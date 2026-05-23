@@ -1,93 +1,575 @@
 const std = @import("std");
 const c = @cImport(@cInclude("time.h"));
 
-const Hmac = std.crypto.auth.hmac.sha2.HmacSha256;
+const rsa = std.crypto.Certificate.rsa;
+const Sha256 = std.crypto.hash.sha2.Sha256;
 
-// base64url no-pad alphabet (RFC 4648 §5)
-const b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const b64enc = std.base64.Base64Encoder.init(b64_alphabet.*, null);
-const b64dec = std.base64.Base64Decoder.init(b64_alphabet.*, null);
+// base64url no-pad (RFC 4648 §5)
+const b64url_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".*;
+const b64dec = std.base64.Base64Decoder.init(b64url_alphabet, null);
 
-// Pre-computed base64url of {"alg":"HS256","typ":"JWT"}
-const header_b64 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+pub const VerifyError = error{
+    MissingBearer,
+    MalformedToken,
+    UnsupportedAlgorithm,
+    UnknownKid,
+    InvalidSignature,
+    Expired,
+    WrongIssuer,
+    WrongAudience,
+    MissingRole,
+    JwksFetchFailed,
+    OutOfMemory,
+};
 
-pub fn issueToken(allocator: std.mem.Allocator, secret: []const u8, ttl_seconds: i64) ![]u8 {
-    const exp = @as(i64, c.time(null)) + ttl_seconds;
+/// One RSA public key entry from a JWKS document.
+pub const Key = struct {
+    kid: []const u8,
+    /// Big-endian RSA modulus, with leading zero bytes stripped to the first
+    /// non-zero byte (matches `Certificate.rsa.PublicKey.fromBytes` expectations).
+    modulus: []const u8,
+    /// Big-endian RSA public exponent (typically 3 bytes for 65537).
+    exponent: []const u8,
+};
 
-    var payload_json_buf: [128]u8 = undefined;
-    const payload_json = try std.fmt.bufPrint(
-        &payload_json_buf,
-        "{{\"sub\":\"dashboard\",\"exp\":{d}}}",
-        .{exp},
-    );
+/// JWT verifier backed by a Keycloak JWKS endpoint.
+///
+/// Owns a cache of public keys keyed by `kid`. The cache can be primed via
+/// `installKey` (tests) or `refreshKeys` (production). On an unknown `kid`,
+/// `verify` triggers a single refresh before giving up.
+/// Minimal spin mutex. Sufficient because contention on the key cache is
+/// rare: prefetch at startup, lazy refresh only on an unknown `kid`.
+const SpinMutex = struct {
+    state: std.atomic.Value(u8) = .{ .raw = 0 },
 
-    var payload_b64_buf: [256]u8 = undefined;
-    const payload_b64_len = b64enc.calcSize(payload_json.len);
-    const payload_b64 = b64enc.encode(payload_b64_buf[0..payload_b64_len], payload_json);
-
-    var signing_buf: [512]u8 = undefined;
-    const signing_input = try std.fmt.bufPrint(
-        &signing_buf,
-        "{s}.{s}",
-        .{ header_b64, payload_b64 },
-    );
-
-    var mac: [Hmac.mac_length]u8 = undefined;
-    Hmac.create(&mac, signing_input, secret);
-
-    var sig_buf: [64]u8 = undefined;
-    const sig_len = b64enc.calcSize(mac.len);
-    const sig = b64enc.encode(sig_buf[0..sig_len], &mac);
-
-    return std.fmt.allocPrint(allocator, "{s}.{s}.{s}", .{ header_b64, payload_b64, sig });
-}
-
-/// Returns true if Authorization header value is a valid, unexpired Bearer token.
-pub fn validateBearer(authorization: []const u8, secret: []const u8) bool {
-    const prefix = "Bearer ";
-    if (!std.mem.startsWith(u8, authorization, prefix)) return false;
-    return validateToken(authorization[prefix.len..], secret);
-}
-
-fn validateToken(token: []const u8, secret: []const u8) bool {
-    const dot1 = std.mem.indexOfScalar(u8, token, '.') orelse return false;
-    const after1 = token[dot1 + 1 ..];
-    const dot2 = std.mem.indexOfScalar(u8, after1, '.') orelse return false;
-
-    // signing_input = "header_b64.payload_b64"
-    const signing_input = token[0 .. dot1 + 1 + dot2];
-    const sig_b64 = after1[dot2 + 1 ..];
-
-    // Decode signature
-    var decoded_sig: [Hmac.mac_length]u8 = undefined;
-    const decoded_sig_len = b64dec.calcSizeForSlice(sig_b64) catch return false;
-    if (decoded_sig_len != Hmac.mac_length) return false;
-    b64dec.decode(&decoded_sig, sig_b64) catch return false;
-
-    // Recompute and compare (XOR accumulate — constant-time enough for this use case)
-    var expected: [Hmac.mac_length]u8 = undefined;
-    Hmac.create(&expected, signing_input, secret);
-    var acc: u8 = 0;
-    for (decoded_sig, expected) |a, b| acc |= a ^ b;
-    if (acc != 0) return false;
-
-    // Decode payload and check exp
-    const payload_b64 = token[dot1 + 1 .. dot1 + 1 + dot2];
-    var payload_buf: [256]u8 = undefined;
-    const payload_len = b64dec.calcSizeForSlice(payload_b64) catch return false;
-    if (payload_len > payload_buf.len) return false;
-    b64dec.decode(payload_buf[0..payload_len], payload_b64) catch return false;
-    const payload = payload_buf[0..payload_len];
-
-    // Extract exp field
-    const exp_key = "\"exp\":";
-    const exp_start_idx = std.mem.indexOf(u8, payload, exp_key) orelse return false;
-    const digits_start = exp_start_idx + exp_key.len;
-    var digits_end = digits_start;
-    while (digits_end < payload.len and payload[digits_end] >= '0' and payload[digits_end] <= '9') {
-        digits_end += 1;
+    fn lock(self: *SpinMutex) void {
+        while (self.state.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) {
+            std.atomic.spinLoopHint();
+        }
     }
-    const exp = std.fmt.parseInt(i64, payload[digits_start..digits_end], 10) catch return false;
 
-    return @as(i64, c.time(null)) < exp;
+    fn unlock(self: *SpinMutex) void {
+        self.state.store(0, .release);
+    }
+};
+
+pub const Verifier = struct {
+    allocator: std.mem.Allocator,
+    jwks_url: []const u8,
+    issuer: []const u8,
+    keys_arena: std.heap.ArenaAllocator,
+    keys: std.ArrayList(Key),
+    mutex: SpinMutex,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        jwks_url: []const u8,
+        issuer: []const u8,
+    ) Verifier {
+        return .{
+            .allocator = allocator,
+            .jwks_url = jwks_url,
+            .issuer = issuer,
+            .keys_arena = std.heap.ArenaAllocator.init(allocator),
+            .keys = .empty,
+            .mutex = .{},
+        };
+    }
+
+    pub fn deinit(self: *Verifier) void {
+        self.keys.deinit(self.allocator);
+        self.keys_arena.deinit();
+    }
+
+    /// Test hook: install a public key directly, bypassing JWKS fetch.
+    /// `modulus` and `exponent` are raw big-endian byte slices (already
+    /// base64url-decoded). Caller's memory is copied into the verifier.
+    pub fn installKey(
+        self: *Verifier,
+        kid: []const u8,
+        modulus: []const u8,
+        exponent: []const u8,
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.appendKeyLocked(kid, modulus, exponent);
+    }
+
+    fn appendKeyLocked(
+        self: *Verifier,
+        kid: []const u8,
+        modulus: []const u8,
+        exponent: []const u8,
+    ) !void {
+        const arena = self.keys_arena.allocator();
+        const k = Key{
+            .kid = try arena.dupe(u8, kid),
+            .modulus = try arena.dupe(u8, modulus),
+            .exponent = try arena.dupe(u8, exponent),
+        };
+        try self.keys.append(self.allocator, k);
+    }
+
+    /// Fetch JWKS from `jwks_url` and replace the cache.
+    /// `io` is the Zig 0.16 Io handle (required by `std.http.Client`).
+    pub fn refreshKeys(self: *Verifier, io: std.Io) VerifyError!void {
+        var client = std.http.Client{ .allocator = self.allocator, .io = io };
+        defer client.deinit();
+
+        var aw = std.Io.Writer.Allocating.init(self.allocator);
+        defer aw.deinit();
+
+        const result = client.fetch(.{
+            .location = .{ .url = self.jwks_url },
+            .response_writer = &aw.writer,
+        }) catch return error.JwksFetchFailed;
+        if (result.status != .ok) return error.JwksFetchFailed;
+
+        const body = aw.writer.buffer[0..aw.writer.end];
+        try self.parseJwks(body);
+    }
+
+    fn parseJwks(self: *Verifier, json_bytes: []const u8) VerifyError!void {
+        var parsed = std.json.parseFromSlice(
+            JwksDoc,
+            self.allocator,
+            json_bytes,
+            .{ .ignore_unknown_fields = true },
+        ) catch return error.JwksFetchFailed;
+        defer parsed.deinit();
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        _ = self.keys_arena.reset(.retain_capacity);
+        self.keys.clearRetainingCapacity();
+
+        for (parsed.value.keys) |entry| {
+            if (!std.mem.eql(u8, entry.kty, "RSA")) continue;
+            if (entry.alg) |alg| {
+                if (!std.mem.eql(u8, alg, "RS256")) continue;
+            }
+
+            const arena = self.keys_arena.allocator();
+            const modulus = decodeBase64Url(arena, entry.n) catch continue;
+            const exponent = decodeBase64Url(arena, entry.e) catch continue;
+            const modulus_stripped = stripLeadingZeros(modulus);
+
+            self.appendKeyLocked(entry.kid, modulus_stripped, exponent) catch
+                return error.OutOfMemory;
+        }
+    }
+
+    /// Verify an `Authorization: Bearer <jwt>` header against this verifier.
+    /// Required checks: RS256 signature, issuer match, exp in the future,
+    /// `aud` or `azp` matches `expected_audience`, and `required_role` is
+    /// present in `realm_access.roles`.
+    /// `io` may be null in tests that pre-install keys; production callers
+    /// must supply it so an unknown `kid` can trigger a JWKS refresh.
+    pub fn verify(
+        self: *Verifier,
+        io: ?std.Io,
+        authorization_header: []const u8,
+        expected_audience: []const u8,
+        required_role: []const u8,
+    ) VerifyError!void {
+        const prefix = "Bearer ";
+        if (!std.mem.startsWith(u8, authorization_header, prefix)) return error.MissingBearer;
+        const token = authorization_header[prefix.len..];
+
+        const parts = splitJwt(token) orelse return error.MalformedToken;
+
+        // Header: extract `kid` and check `alg`.
+        var header_buf: [512]u8 = undefined;
+        const header_json = decodeIntoBuf(&header_buf, parts.header_b64) catch
+            return error.MalformedToken;
+        const header = parseJwtHeader(header_json) catch return error.MalformedToken;
+        if (!std.mem.eql(u8, header.alg, "RS256")) return error.UnsupportedAlgorithm;
+
+        // Key lookup; on miss, refresh once and retry.
+        var key_opt = self.findKey(header.kid);
+        if (key_opt == null) {
+            if (io) |io_h| {
+                self.refreshKeys(io_h) catch return error.UnknownKid;
+                key_opt = self.findKey(header.kid);
+            }
+        }
+        const key = key_opt orelse return error.UnknownKid;
+
+        // Signature.
+        const signing_input = token[0 .. parts.header_b64.len + 1 + parts.payload_b64.len];
+        var sig_buf: [768]u8 = undefined; // up to 4096-bit RSA = 512 bytes
+        const sig = decodeIntoBuf(&sig_buf, parts.signature_b64) catch
+            return error.InvalidSignature;
+        verifyRs256(signing_input, sig, key) catch return error.InvalidSignature;
+
+        // Payload claims.
+        var payload_buf: [4096]u8 = undefined;
+        const payload_json = decodeIntoBuf(&payload_buf, parts.payload_b64) catch
+            return error.MalformedToken;
+        const claims = parseClaims(payload_json) catch return error.MalformedToken;
+
+        const now = @as(i64, c.time(null));
+        if (claims.exp <= now) return error.Expired;
+        if (!std.mem.eql(u8, claims.iss, self.issuer)) return error.WrongIssuer;
+
+        if (!claims.matchesAudience(expected_audience)) return error.WrongAudience;
+        if (!claims.hasRole(required_role)) return error.MissingRole;
+    }
+
+    fn findKey(self: *Verifier, kid: []const u8) ?Key {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.keys.items) |k| {
+            if (std.mem.eql(u8, k.kid, kid)) return k;
+        }
+        return null;
+    }
+};
+
+const JwksDoc = struct {
+    keys: []const JwksEntry,
+};
+
+const JwksEntry = struct {
+    kty: []const u8,
+    kid: []const u8,
+    n: []const u8,
+    e: []const u8,
+    alg: ?[]const u8 = null,
+    use: ?[]const u8 = null,
+};
+
+const JwtParts = struct {
+    header_b64: []const u8,
+    payload_b64: []const u8,
+    signature_b64: []const u8,
+};
+
+fn splitJwt(token: []const u8) ?JwtParts {
+    const dot1 = std.mem.indexOfScalar(u8, token, '.') orelse return null;
+    const rest = token[dot1 + 1 ..];
+    const dot2 = std.mem.indexOfScalar(u8, rest, '.') orelse return null;
+    return .{
+        .header_b64 = token[0..dot1],
+        .payload_b64 = rest[0..dot2],
+        .signature_b64 = rest[dot2 + 1 ..],
+    };
+}
+
+const JwtHeader = struct {
+    alg: []const u8,
+    kid: []const u8,
+};
+
+fn parseJwtHeader(json_bytes: []const u8) !JwtHeader {
+    const alg = extractStringField(json_bytes, "alg") orelse return error.MissingAlg;
+    const kid = extractStringField(json_bytes, "kid") orelse return error.MissingKid;
+    return .{ .alg = alg, .kid = kid };
+}
+
+const Claims = struct {
+    iss: []const u8,
+    exp: i64,
+    aud: AudienceField,
+    azp: ?[]const u8,
+    realm_roles: []const []const u8,
+
+    fn matchesAudience(self: Claims, expected: []const u8) bool {
+        if (self.azp) |azp| {
+            if (std.mem.eql(u8, azp, expected)) return true;
+        }
+        switch (self.aud) {
+            .single => |s| return std.mem.eql(u8, s, expected),
+            .multi => |xs| {
+                for (xs) |x| if (std.mem.eql(u8, x, expected)) return true;
+                return false;
+            },
+            .absent => return false,
+        }
+    }
+
+    fn hasRole(self: Claims, role: []const u8) bool {
+        for (self.realm_roles) |r| if (std.mem.eql(u8, r, role)) return true;
+        return false;
+    }
+};
+
+const AudienceField = union(enum) {
+    absent: void,
+    single: []const u8,
+    multi: []const []const u8,
+};
+
+threadlocal var claims_buf: [4096]u8 = undefined;
+
+fn parseClaims(json_bytes: []const u8) !Claims {
+    // Minimal hand parser to keep claims valid across allocator lifetimes and
+    // to dodge the JSON parser's discriminated-union handling for `aud`.
+    // Copy bytes into a thread-local buffer so the returned slices outlive
+    // the caller's stack frame for the duration of one verify() call.
+    if (json_bytes.len > claims_buf.len) return error.TooLong;
+    @memcpy(claims_buf[0..json_bytes.len], json_bytes);
+    const buf = claims_buf[0..json_bytes.len];
+
+    var claims: Claims = .{
+        .iss = "",
+        .exp = 0,
+        .aud = .absent,
+        .azp = null,
+        .realm_roles = &.{},
+    };
+
+    claims.iss = extractStringField(buf, "iss") orelse return error.MissingIss;
+    claims.exp = extractIntField(buf, "exp") orelse return error.MissingExp;
+    claims.azp = extractStringField(buf, "azp");
+
+    if (findKey(buf, "aud")) |idx| {
+        // Either "aud":"..." or "aud":["...",...]
+        var i = idx;
+        while (i < buf.len and buf[i] != ':') i += 1;
+        i += 1;
+        while (i < buf.len and (buf[i] == ' ' or buf[i] == '\t')) i += 1;
+        if (i < buf.len and buf[i] == '"') {
+            const end = std.mem.indexOfScalarPos(u8, buf, i + 1, '"') orelse return error.MalformedAud;
+            claims.aud = .{ .single = buf[i + 1 .. end] };
+        } else if (i < buf.len and buf[i] == '[') {
+            const arr_end = std.mem.indexOfScalarPos(u8, buf, i, ']') orelse return error.MalformedAud;
+            claims.aud = .{ .multi = try splitStringArray(buf[i + 1 .. arr_end]) };
+        }
+    }
+
+    if (findKey(buf, "realm_access")) |idx_ra| {
+        // Need "realm_access":{ "roles":["...","..."] }
+        if (findKeyAfter(buf, "roles", idx_ra)) |idx_roles| {
+            var i = idx_roles;
+            while (i < buf.len and buf[i] != '[') i += 1;
+            const arr_end = std.mem.indexOfScalarPos(u8, buf, i, ']') orelse return error.MalformedRoles;
+            claims.realm_roles = try splitStringArray(buf[i + 1 .. arr_end]);
+        }
+    }
+
+    return claims;
+}
+
+threadlocal var role_slots: [16][]const u8 = undefined;
+
+fn splitStringArray(arr_body: []const u8) ![]const []const u8 {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < arr_body.len) {
+        while (i < arr_body.len and arr_body[i] != '"') i += 1;
+        if (i >= arr_body.len) break;
+        const start = i + 1;
+        const end = std.mem.indexOfScalarPos(u8, arr_body, start, '"') orelse return error.MalformedArray;
+        if (n >= role_slots.len) return error.TooManyEntries;
+        role_slots[n] = arr_body[start..end];
+        n += 1;
+        i = end + 1;
+    }
+    return role_slots[0..n];
+}
+
+fn findKey(buf: []const u8, key: []const u8) ?usize {
+    var pattern_buf: [64]u8 = undefined;
+    if (key.len + 2 > pattern_buf.len) return null;
+    pattern_buf[0] = '"';
+    @memcpy(pattern_buf[1 .. 1 + key.len], key);
+    pattern_buf[1 + key.len] = '"';
+    return std.mem.indexOf(u8, buf, pattern_buf[0 .. 2 + key.len]);
+}
+
+fn findKeyAfter(buf: []const u8, key: []const u8, from: usize) ?usize {
+    var pattern_buf: [64]u8 = undefined;
+    if (key.len + 2 > pattern_buf.len) return null;
+    pattern_buf[0] = '"';
+    @memcpy(pattern_buf[1 .. 1 + key.len], key);
+    pattern_buf[1 + key.len] = '"';
+    return std.mem.indexOfPos(u8, buf, from, pattern_buf[0 .. 2 + key.len]);
+}
+
+fn extractStringField(buf: []const u8, key: []const u8) ?[]const u8 {
+    const idx = findKey(buf, key) orelse return null;
+    var i = idx;
+    while (i < buf.len and buf[i] != ':') i += 1;
+    i += 1;
+    while (i < buf.len and (buf[i] == ' ' or buf[i] == '\t')) i += 1;
+    if (i >= buf.len or buf[i] != '"') return null;
+    const start = i + 1;
+    const end = std.mem.indexOfScalarPos(u8, buf, start, '"') orelse return null;
+    return buf[start..end];
+}
+
+fn extractIntField(buf: []const u8, key: []const u8) ?i64 {
+    const idx = findKey(buf, key) orelse return null;
+    var i = idx;
+    while (i < buf.len and buf[i] != ':') i += 1;
+    i += 1;
+    while (i < buf.len and (buf[i] == ' ' or buf[i] == '\t')) i += 1;
+    const start = i;
+    while (i < buf.len and buf[i] >= '0' and buf[i] <= '9') i += 1;
+    if (i == start) return null;
+    return std.fmt.parseInt(i64, buf[start..i], 10) catch null;
+}
+
+fn decodeBase64Url(allocator: std.mem.Allocator, src: []const u8) ![]u8 {
+    const dec_len = try b64dec.calcSizeForSlice(src);
+    const out = try allocator.alloc(u8, dec_len);
+    try b64dec.decode(out, src);
+    return out;
+}
+
+fn decodeIntoBuf(buf: []u8, src: []const u8) ![]const u8 {
+    const dec_len = try b64dec.calcSizeForSlice(src);
+    if (dec_len > buf.len) return error.TooLong;
+    try b64dec.decode(buf[0..dec_len], src);
+    return buf[0..dec_len];
+}
+
+fn stripLeadingZeros(bytes: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < bytes.len and bytes[i] == 0) i += 1;
+    return bytes[i..];
+}
+
+fn verifyRs256(signing_input: []const u8, sig: []const u8, key: Key) !void {
+    const public_key = try rsa.PublicKey.fromBytes(key.exponent, key.modulus);
+    if (sig.len != key.modulus.len) return error.InvalidSignature;
+    switch (sig.len) {
+        inline 128, 256, 384, 512 => |modulus_len| {
+            try rsa.PKCS1v1_5Signature.verify(
+                modulus_len,
+                sig[0..modulus_len].*,
+                signing_input,
+                public_key,
+                Sha256,
+            );
+        },
+        else => return error.UnsupportedModulusLength,
+    }
+}
+
+// ============================ Tests ============================
+
+const testing = std.testing;
+
+test "splitJwt: rejects 2-part token" {
+    try testing.expect(splitJwt("a.b") == null);
+}
+
+test "splitJwt: rejects 1-part token" {
+    try testing.expect(splitJwt("onlyone") == null);
+}
+
+test "splitJwt: parses 3-part token" {
+    const parts = splitJwt("header.payload.sig").?;
+    try testing.expectEqualStrings("header", parts.header_b64);
+    try testing.expectEqualStrings("payload", parts.payload_b64);
+    try testing.expectEqualStrings("sig", parts.signature_b64);
+}
+
+test "extractStringField: simple string" {
+    const json = "{\"iss\":\"https://example.com\",\"sub\":\"u1\"}";
+    try testing.expectEqualStrings("https://example.com", extractStringField(json, "iss").?);
+    try testing.expectEqualStrings("u1", extractStringField(json, "sub").?);
+}
+
+test "extractStringField: missing key" {
+    try testing.expect(extractStringField("{\"a\":\"b\"}", "missing") == null);
+}
+
+test "extractIntField: positive int" {
+    try testing.expectEqual(@as(i64, 1234567890), extractIntField("{\"exp\":1234567890}", "exp").?);
+}
+
+test "extractIntField: missing key" {
+    try testing.expect(extractIntField("{\"a\":1}", "missing") == null);
+}
+
+test "parseClaims: full Keycloak-shaped payload" {
+    const json =
+        \\{"iss":"https://www.lab.local/auth/realms/iot","exp":4000000000,"aud":"dashboard-client","azp":"dashboard-client","realm_access":{"roles":["dashboard-user","offline_access"]}}
+    ;
+    const claims = try parseClaims(json);
+    try testing.expectEqualStrings("https://www.lab.local/auth/realms/iot", claims.iss);
+    try testing.expectEqual(@as(i64, 4000000000), claims.exp);
+    try testing.expect(claims.matchesAudience("dashboard-client"));
+    try testing.expect(!claims.matchesAudience("lstm-client"));
+    try testing.expect(claims.hasRole("dashboard-user"));
+    try testing.expect(!claims.hasRole("admin-user"));
+}
+
+test "parseClaims: aud as array" {
+    const json =
+        \\{"iss":"x","exp":1,"aud":["a","b","c"],"realm_access":{"roles":["r1"]}}
+    ;
+    const claims = try parseClaims(json);
+    try testing.expect(claims.matchesAudience("b"));
+    try testing.expect(!claims.matchesAudience("d"));
+}
+
+test "parseClaims: azp alone satisfies audience" {
+    const json =
+        \\{"iss":"x","exp":1,"aud":"account","azp":"lstm-client","realm_access":{"roles":["lstm-control"]}}
+    ;
+    const claims = try parseClaims(json);
+    try testing.expect(claims.matchesAudience("lstm-client"));
+    try testing.expect(!claims.matchesAudience("account-other"));
+    // 'account' is the literal aud, so it also matches by aud:
+    try testing.expect(claims.matchesAudience("account"));
+}
+
+test "parseClaims: missing realm_access => no roles" {
+    const json =
+        \\{"iss":"x","exp":1,"aud":"a"}
+    ;
+    const claims = try parseClaims(json);
+    try testing.expect(!claims.hasRole("anything"));
+}
+
+test "parseClaims: rejects missing exp" {
+    const json =
+        \\{"iss":"x","aud":"a"}
+    ;
+    try testing.expectError(error.MissingExp, parseClaims(json));
+}
+
+test "parseClaims: rejects missing iss" {
+    const json =
+        \\{"exp":1,"aud":"a"}
+    ;
+    try testing.expectError(error.MissingIss, parseClaims(json));
+}
+
+test "stripLeadingZeros: keeps non-zero leader" {
+    const out = stripLeadingZeros(&.{ 0, 0, 0xAB, 0xCD });
+    try testing.expectEqualSlices(u8, &.{ 0xAB, 0xCD }, out);
+}
+
+test "stripLeadingZeros: all zero" {
+    const out = stripLeadingZeros(&.{ 0, 0, 0 });
+    try testing.expectEqual(@as(usize, 0), out.len);
+}
+
+test "Verifier: installKey then findKey" {
+    var v = Verifier.init(testing.allocator, "http://nowhere/jwks", "iss");
+    defer v.deinit();
+    try v.installKey("kid1", &.{ 0xAB, 0xCD }, &.{ 0x01, 0x00, 0x01 });
+    const k = v.findKey("kid1") orelse return error.NotFound;
+    try testing.expectEqualStrings("kid1", k.kid);
+    try testing.expectEqualSlices(u8, &.{ 0xAB, 0xCD }, k.modulus);
+    try testing.expect(v.findKey("other") == null);
+}
+
+test "Verifier: rejects token without Bearer prefix" {
+    var v = Verifier.init(testing.allocator, "http://nowhere/jwks", "iss");
+    defer v.deinit();
+    try testing.expectError(error.MissingBearer, v.verify(null, "not-bearer", "aud", "role"));
+}
+
+test "Verifier: malformed token shape" {
+    var v = Verifier.init(testing.allocator, "http://nowhere/jwks", "iss");
+    defer v.deinit();
+    try testing.expectError(error.MalformedToken, v.verify(null, "Bearer onepart", "aud", "role"));
+    try testing.expectError(error.MalformedToken, v.verify(null, "Bearer two.parts", "aud", "role"));
 }

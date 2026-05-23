@@ -62,14 +62,14 @@ The new design is cleaner:
 src/                        Zig source
   main.zig                  entry point, reads secrets, starts server
   server.zig                TCP listener + per-connection worker threads
-  router.zig                URL dispatch, JWT validation
-  auth.zig                  JWT issue + validate (HS256)
+  router.zig                URL dispatch, per-route audience + role policy
+  auth.zig                  JWKS client + RS256 access-token verifier (Keycloak)
   db.zig                    libpq wrapper (query, exec, parameterised variants)
   handlers/
     health.zig              GET /health
-    login.zig               POST /auth/login
     sensor.zig              GET + POST /api/v1/sensor-data
     actuator.zig            POST /api/v1/actuator-command
+    sensor_request.zig      POST /api/v1/sensor-request
 docker/
   docker-compose.yml
   setup_tls.sh              generates CA + certs for nginx and mosquitto
@@ -168,16 +168,17 @@ Required files include:
 db_password.txt
 db_write_password.txt
 db_read_password.txt
-jwt_secret.txt
-api_password.txt
+keycloak_controller_secret.txt
+keycloak_lstm_secret.txt
 mqtt_controller_user.txt
 mqtt_controller_password.txt
+mqtt_sensor01_password.txt
 ca_cert.txt
 keycloak_db_password.txt
 keycloak_controller_secret.txt
 keycloak_lstm_secret.txt
 ```
-Secrets must never be committed. They contain database passwords, JWT keys, MQTT credentials, API credentials and CA certificates.
+Secrets must never be committed. They contain database passwords, Keycloak client secrets, MQTT credentials, and CA certificates.
 
 The three `keycloak_*` secrets are specific to the Keycloak integration. See [docs/backend/keycloak-backup.md](docs/backend/keycloak-backup.md) for backup and restore procedures.
 
@@ -262,12 +263,14 @@ sensor01 | 22.4 | C
 
 ## Operator Helpers
 
-Shell scripts under `scripts/` wrap the `/auth/login` + `/api/v1/actuator-command`
+Shell scripts under `scripts/` wrap the Keycloak token-fetch + `/api/v1/actuator-command`
 flow so operators can toggle the Pico relays without hand-crafting curl calls.
+They obtain a token from Keycloak (client-credentials, against a dedicated
+operator client) and then POST the command with the resulting access token.
 
 ```sh
 cd scripts
-cp .env.example .env        # fill in BACKEND_URL + dashboard credentials
+cp .env.example .env        # fill in BACKEND_URL + Keycloak token URL + client secret
 ./cooler.sh on              # FAN_ON
 ./cooler.sh off             # FAN_OFF
 ./heater.sh on              # HEAT_ON

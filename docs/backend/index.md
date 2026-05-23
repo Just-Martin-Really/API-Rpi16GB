@@ -61,14 +61,14 @@ The new design is cleaner:
 src/                        Zig source
   main.zig                  entry point, reads secrets, starts server
   server.zig                TCP listener + per-connection worker threads
-  router.zig                URL dispatch, JWT validation
-  auth.zig                  JWT issue + validate (HS256)
+  router.zig                URL dispatch, per-route audience + role policy
+  auth.zig                  JWKS client + RS256 access-token verifier (Keycloak)
   db.zig                    libpq wrapper (query, exec, parameterised variants)
   handlers/
     health.zig              GET /health
-    login.zig               POST /auth/login
     sensor.zig              GET + POST /api/v1/sensor-data
     actuator.zig            POST /api/v1/actuator-command
+    sensor_request.zig      POST /api/v1/sensor-request
 docker/
   docker-compose.yml
   setup_tls.sh              generates CA + certs for nginx and mosquitto
@@ -167,13 +167,14 @@ Required files include:
 db_password.txt
 db_write_password.txt
 db_read_password.txt
-jwt_secret.txt
-api_password.txt
+keycloak_controller_secret.txt
+keycloak_lstm_secret.txt
 mqtt_controller_user.txt
 mqtt_controller_password.txt
+mqtt_sensor01_password.txt
 ca_cert.txt
 ```
-Secrets must never be committed. They contain database passwords, JWT keys, MQTT credentials, API credentials and CA certificates.
+Secrets must never be committed. They contain database passwords, Keycloak client secrets, MQTT credentials, and CA certificates.
 
 ## Deploy (on the Pi)
 
