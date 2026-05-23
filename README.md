@@ -117,16 +117,15 @@ psycopg2 / direct PostgreSQL dependency
 Added for the Controller:
 
 ```
-API_BASE_URL=https://nginx
-API_USERNAME=admin
-api_password
+API_BASE_URL=https://nginx:8443
+api_key        # x-api-key header to the backend (legacy; migrating to Keycloak client_credentials in phase 6)
 ca_cert
 ```
 The Controller now:
 1. connects to Mosquitto via MQTT/TLS
 2. receives messages from sensor topics such as sensor01/data
 3. validates the payload
-4. logs in to the Zig API through nginx
+4. authenticates to the Zig backend through nginx (`x-api-key` today, Keycloak Bearer token after the phase-6 controller refactor)
 5. sends sensor readings to /api/v1/sensor-data
 6. lets the backend store the data in PostgreSQL
 

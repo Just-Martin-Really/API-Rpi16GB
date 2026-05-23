@@ -91,16 +91,19 @@ ACTUATOR_HEATER_ID=heater01
 ACTUATOR_COOLER_ID=cooler01
 ```
 
-### Service account credentials
+### Keycloak client credentials
 
-The control loop logs in via `POST /auth/login` as the `lstm` user. Both `init.sql` (fresh DBs) and `migrate.sql` (existing DBs) seed the row with the password `changeme`. Rotate before going live:
+The control loop authenticates as the `lstm-client` confidential client in the `iot` realm. The realm is provisioned out of `docker/keycloak/iot-realm.json`; `lstm-client` is granted the `lstm-control` realm role, which the backend checks before accepting a `POST /api/v1/actuator-command` call.
+
+The client secret is hardcoded in `iot-realm.json` (see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)) and the same verbatim value lives in the secret file:
 
 ```sh
-echo "<strong password>" > docker/secrets/dashboard_lstm_password.txt
-docker/set_passwords.sh
+echo "sc_lstm_client" > docker/secrets/keycloak_lstm_secret.txt
 ```
 
-`set_passwords.sh` updates `dashboard_users.password_sha256` for the `lstm` row. The same secret file is mounted into the `lstm` container at `/run/secrets/dashboard_lstm_password`. For local-workstation development put the matching password into the file referenced by `LSTM_PASS_FILE` in `lstm/.env`.
+The file is mounted into the `lstm` container at `/run/secrets/keycloak_lstm_secret`. The control loop reads it, requests a token from `http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token` via the client-credentials grant, caches it, and refreshes a few seconds before `expires_in`. A 401 from the backend forces a one-shot refresh and a retry, covering token rotations and brief Keycloak restarts.
+
+> The control-loop implementation that consumes this secret arrives with the `feat/keycloak-lstm-client` merge. Until then the LSTM compose block on `integration/phase-6` still references the legacy `dashboard_lstm_password` mount, which is removed in the same merge.
 
 ### CA cert
 

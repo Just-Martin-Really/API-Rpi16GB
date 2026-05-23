@@ -196,7 +196,7 @@ The backend boots with two environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `KEYCLOAK_JWKS_URL` | `http://keycloak:8080/realms/iot/protocol/openid-connect/certs` | JWKS endpoint. Internal compose-network URL; no TLS needed. |
+| `KEYCLOAK_JWKS_URL` | `http://keycloak:8080/auth/realms/iot/protocol/openid-connect/certs` | JWKS endpoint. Internal compose-network URL; no TLS needed. The `/auth/` prefix matches `KC_HTTP_RELATIVE_PATH=/auth` on the keycloak service. |
 | `KEYCLOAK_ISSUER` | `https://www.lab.local/auth/realms/iot` | Required `iss` claim in every accepted token. |
 
 On startup the verifier best-effort fetches JWKS once so the first request does not pay the round-trip. Subsequent unknown `kid`s trigger one refresh-then-retry; if the key still cannot be resolved the request is rejected with 403.
