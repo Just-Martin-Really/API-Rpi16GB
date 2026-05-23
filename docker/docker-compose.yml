@@ -29,10 +29,6 @@ secrets:
     file: ./secrets/dashboard_lstm_password.txt
   keycloak_db_password:
     file: ./secrets/keycloak_db_password.txt
-  keycloak_controller_secret:
-    file: ./secrets/keycloak_controller_secret.txt
-  keycloak_lstm_secret:
-    file: secrets/keycloak_lstm_secrets.txt
   keycloak_admin_password:
     file: ./secrets/keycloak_admin_password.txt
 
