@@ -28,6 +28,7 @@ The Controller no longer writes directly to PostgreSQL. Instead, it forwards val
 - **Mosquitto** — MQTT broker, TLS, per-sensor ACL
 - **Python controller** — MQTT → HTTPS API bridge
 - **Python archiver** — daily job, moves rows older than 7 days to `sensor_data_archive`, purges archive after 3 years
+- **Keycloak 26.1** — Identity & Access Management, Realm `iot`, OIDC/OAuth2
 - **Docker** — container orchestration, two isolated bridge networks (`app-net`, `sensor-net`)
 
 ## Architecture
@@ -172,8 +173,13 @@ api_password.txt
 mqtt_controller_user.txt
 mqtt_controller_password.txt
 ca_cert.txt
+keycloak_db_password.txt
+keycloak_controller_secret.txt
+keycloak_lstm_secret.txt
 ```
 Secrets must never be committed. They contain database passwords, JWT keys, MQTT credentials, API credentials and CA certificates.
+
+The three `keycloak_*` secrets are specific to the Keycloak integration. See [docs/backend/keycloak-backup.md](docs/backend/keycloak-backup.md) for backup and restore procedures.
 
 ## Deploy (on the Pi)
 

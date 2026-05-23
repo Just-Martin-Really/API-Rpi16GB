@@ -15,6 +15,11 @@ Identity-Provider in den bestehenden Docker-Compose-Stack.
 | `docker/secrets/keycloak_controller_secret.txt` | neu | Client-Secret für `controller-client` (gitignored) |
 | `docker/secrets/keycloak_lstm_secret.txt` | neu | Client-Secret für `lstm-client` (gitignored) |
 | `docker/postgres/create_keycloak_db.sql` | gelöscht | durch `keycloak-db`-Service überflüssig — DB wird automatisch per `POSTGRES_DB` angelegt |
+| `scripts/backup_keycloak_db.sh` | neu | pg_dump-Backup-Skript für `keycloak-db` nach `docker/backups/` |
+| `docker/backups/.gitignore` | neu | verhindert versehentliches Committen von Backup-Dateien |
+| `docs/backend/keycloak-backup.md` | neu | Backup- und Restore-Anleitung |
+| `docs/backend/setup.md` | geändert | Keycloak-Secrets in 1.8, Realm-Verifikation in Part 2, Backup in Part 5 |
+| `README.md` | geändert | Keycloak im Stack, neue Secrets, Link zur Backup-Doku |
 | `docker/postgres/migrate_to_kc.sql` | gelöscht | doppelter, fehlerhafter Ersatz von `create_keycloak_db.sql` (ungültiges `\idempotent`) |
 | `docker/keycloak/migrate_data_2_kc.sh` | gelöscht | manuelles Setup-Skript, das nur die obigen SQL-Dateien ausgeführt hat — vollständig abgelöst |
 
@@ -86,7 +91,7 @@ keycloak-db startet
 ```yaml
 volumes:
   postgres_data:
-  keycloak_postgres_data:   # <── neu
+  keycloak_db_data:   # <── neu (Name laut Story-Definition)
 ```
 
 ### 2. Erweiteter Secrets-Block
