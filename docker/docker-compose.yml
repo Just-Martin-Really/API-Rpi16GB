@@ -276,6 +276,11 @@ services:
       KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+      KC_HOSTNAME: https://www.lab.local
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
     secrets:
       - keycloak_db_password
       - keycloak_admin_password
@@ -284,7 +289,7 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/master || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/auth/realms/master || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10

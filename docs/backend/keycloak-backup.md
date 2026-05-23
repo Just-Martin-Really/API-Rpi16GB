@@ -95,11 +95,11 @@ docker compose logs -f keycloak
 
 ```sh
 # Realm muss wieder vorhanden sein
-curl -s http://localhost:8080/realms/iot | jq .realm
+curl -s http://localhost:8080/auth/realms/iot | jq .realm
 # Ausgabe: "iot"
 
 # Benutzer prüfen (mit Admin-Token)
-curl -s http://localhost:8080/realms/iot/protocol/openid-connect/token \
+curl -s http://localhost:8080/auth/realms/iot/protocol/openid-connect/token \
   -d "grant_type=password" \
   -d "client_id=dashboard-client" \
   -d "username=iotuser01" \

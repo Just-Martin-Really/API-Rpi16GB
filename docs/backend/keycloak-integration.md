@@ -78,7 +78,7 @@ keycloak-db startet
               └─► Importiert /opt/keycloak/data/import/iot-realm.json
                       │  (nur beim ersten Start, wenn Realm noch nicht existiert)
                       ▼
-                  [healthy]  curl -sf http://localhost:8080/realms/master
+                  [healthy]  curl -sf http://localhost:8080/auth/realms/master
                       │  (Healthcheck: interval 30s, retries 10, start_period 120s)
 ```
 
@@ -130,7 +130,7 @@ keycloak-db:
   secrets:
     - keycloak_db_password
   volumes:
-    - keycloak_postgres_data:/var/lib/postgresql/data
+    - keycloak_db_data:/var/lib/postgresql/data
   networks:
     - app-net
   healthcheck:
@@ -149,10 +149,25 @@ keycloak-db:
 | `KC_DB_URL` | `jdbc:postgresql://postgres:5432/keycloak` | `jdbc:postgresql://keycloak-db:5432/keycloak` |
 | `KC_DB_PASSWORD` | hardcoded `changeme_db_password` | — (entfernt) |
 | `KC_DB_PASSWORD_FILE` | — | `/run/secrets/keycloak_db_password` |
-| `secrets` | — | `keycloak_db_password` |
+| `KC_HOSTNAME` | — | `https://www.lab.local` |
+| `KC_HTTP_RELATIVE_PATH` | — | `/auth` |
+| `KC_HOSTNAME_STRICT` | — | `"false"` |
+| `KC_PROXY_HEADERS` | — | `xforwarded` |
+| `KC_HTTP_ENABLED` | — | `"true"` |
+| `secrets` | — | `keycloak_db_password`, `keycloak_admin_password` |
 | `volumes` | — | `iot-realm.json` → `/opt/keycloak/data/import/` |
-| `healthcheck` | — | `curl -sf http://localhost:8080/realms/master` |
+| `healthcheck` | — | `curl -sf http://localhost:8080/auth/realms/master` |
 | `depends_on` | `postgres` (kein condition) | `keycloak-db: condition: service_healthy` |
+
+#### Hostname-, Pfad- und Proxy-Konfiguration
+
+| Variable | Bedeutung | Wirkung |
+|---|---|---|
+| `KC_HOSTNAME=https://www.lab.local` | Öffentliche Frontend-URL, die Keycloak in Tokens und Redirects schreibt | `iss`-Claim wird zu `https://www.lab.local/auth/realms/iot` (Spec-konform zu Kap. 6, Folie 6-22) |
+| `KC_HTTP_RELATIVE_PATH=/auth` | URL-Prefix für alle Keycloak-Endpunkte | Token/JWKS/Admin-UI hängen alle unter `/auth/*` — passt zu Chap6 Folien 6-19 und 6-21 |
+| `KC_HOSTNAME_STRICT=false` | Erlaubt Aufrufe, die nicht über `KC_HOSTNAME` kommen (z. B. interner Container-DNS `keycloak:8080`) | LSTM und Controller können intern HTTP nutzen, ohne dass Keycloak per Hostname-Check ablehnt |
+| `KC_PROXY_HEADERS=xforwarded` | Wertet `X-Forwarded-*`-Header aus, die nginx setzt | Keycloak erkennt die Original-HTTPS-Verbindung trotz internem HTTP zwischen nginx und Keycloak |
+| `KC_HTTP_ENABLED=true` | Listener auf Port 8080 für Plain-HTTP | Ohne diesen Flag würde Keycloak 26 im `start-dev`-Modus zwar funktionieren, im späteren `start`-Modus aber HTTPS-only fahren |
 
 ---
 
@@ -162,14 +177,15 @@ keycloak-db:
 
 ```
 realm:               iot
-sslRequired:         all
+sslRequired:         external
 registrationAllowed: false
 bruteForceProtected: true
 ```
 
-> **Hinweis:** `sslRequired: all` bedeutet, dass Keycloak für Client-Verbindungen
-> HTTPS voraussetzt. In dieser Konfiguration terminiert nginx das TLS; intern
-> kommunizieren die Services über HTTP im `app-net`.
+> **Hinweis:** `sslRequired: external` verlangt HTTPS für externe (nicht-private)
+> Clients und erlaubt gleichzeitig Plain-HTTP im internen `app-net`. nginx
+> terminiert TLS am Edge (`https://www.lab.local`), Services wie `lstm` und
+> `controller` reden intern HTTP gegen `keycloak:8080`.
 
 ### Rollen
 
@@ -230,7 +246,7 @@ Browser ──► nginx ──► Backend (JWT im Authorization-Header)
 
 Service-to-Service (controller-client / lstm-client)
 ─────────────────────────────────────────────────────
-Service ──► Keycloak  POST /realms/iot/protocol/openid-connect/token
+Service ──► Keycloak  POST /auth/realms/iot/protocol/openid-connect/token
                       grant_type=client_credentials
                       client_id=controller-client
                       client_secret=<aus Secret-Datei>
@@ -256,6 +272,15 @@ Alle Dateien liegen in `docker/secrets/` und sind per `.gitignore` ausgeschlosse
 > identisch sein. Wird ein Secret geändert, muss es in beiden Stellen aktualisiert
 > und Keycloak neu gestartet werden (oder das Secret per Admin-API aktualisiert).
 
+Aktueller Stand der hardcoded Secrets (`docker/keycloak/iot-realm.json`):
+
+| Client | `secret` in `iot-realm.json` | Erwarteter Inhalt der `.txt`-Datei |
+|---|---|---|
+| `controller-client` | `sc_controller_client` | `sc_controller_client` |
+| `lstm-client` | `sc_lstm_client` | `sc_lstm_client` |
+
+> Diese Werte sind absichtlich keine Zufallsstrings — die Entscheidung gegen einen Vault/Entrypoint-Injection-Mechanismus ist in [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md) dokumentiert. Vor dem Produktiveinsatz unbedingt rotieren.
+
 ---
 
 ## Realm-Import testen
@@ -273,22 +298,22 @@ docker compose logs -f keycloak
 #   "Realm 'iot' imported" (beim allerersten Start)
 
 # Realm per REST-API prüfen
-curl -s http://localhost:8080/realms/iot | jq '{realm: .realm, sslRequired: .sslRequired}'
+curl -s http://localhost:8080/auth/realms/iot | jq '{realm: .realm, sslRequired: .sslRequired}'
 # Erwartete Ausgabe:
 # {
 #   "realm": "iot",
-#   "sslRequired": "all"
+#   "sslRequired": "external"
 # }
 
 # Token für iotuser01 holen (testet Login-Flow)
-curl -s -X POST http://localhost:8080/realms/iot/protocol/openid-connect/token \
+curl -s -X POST http://localhost:8080/auth/realms/iot/protocol/openid-connect/token \
   -d "grant_type=password" \
   -d "client_id=dashboard-client" \
   -d "username=iotuser01" \
   -d "password=Test1234!" | jq .access_token
 
 # Token für controller-client (Service-Account) holen
-curl -s -X POST http://localhost:8080/realms/iot/protocol/openid-connect/token \
+curl -s -X POST http://localhost:8080/auth/realms/iot/protocol/openid-connect/token \
   -d "grant_type=client_credentials" \
   -d "client_id=controller-client" \
   -d "client_secret=$(cat secrets/keycloak_controller_secret.txt)" | jq .access_token
@@ -344,9 +369,8 @@ docker compose up -d   ← keycloak-db legt DB an, Keycloak importiert Realm
 
 ## Vor dem Produktiveinsatz
 
-- [ ] `KEYCLOAK_ADMIN_PASSWORD` in `docker-compose.yml` durch ein Secret ersetzen
-- [ ] `keycloak_db_password.txt` mit einem starken Zufallspasswort befüllen
-- [ ] `keycloak_controller_secret.txt` und `keycloak_lstm_secret.txt` neu generieren und in `iot-realm.json` synchronisieren
-- [ ] `sslRequired: all` im Realm zusammen mit nginx-TLS-Proxy testen
-- [ ] `command: start-dev` auf `command: start` + TLS-Konfiguration umstellen
+- [ ] `keycloak_db_password.txt` und `keycloak_admin_password.txt` mit starken Zufallspasswörtern befüllen (siehe `docs/backend/setup.md` § 1.8)
+- [ ] `keycloak_controller_secret.txt` und `keycloak_lstm_secret.txt` rotieren und in `iot-realm.json` synchron halten (Wert in beiden Stellen identisch)
+- [ ] Ende-zu-Ende-Test mit aktiviertem nginx-TLS-Proxy: Browser-Login, Controller-Token, LSTM-Token (siehe Testmatrix in `INTEGRATION-TODOS.md` auf `integration/phase-6`)
+- [ ] `command: start-dev` auf `command: start` umstellen, sobald `KC_HOSTNAME`/`KC_PROXY_HEADERS` produktiv getestet sind
 - [ ] Passwort für `iotuser01` (`Test1234!`) ändern oder den Account deaktivieren

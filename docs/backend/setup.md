@@ -115,26 +115,21 @@ chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 
 The CA cert (`ca_cert.txt`) is written automatically by `setup_tls.sh` in the next step.
 
-Generate Keycloak secrets. The values in the secret files must match the `secret` fields in `docker/keycloak/iot-realm.json` for the confidential clients:
+Generate Keycloak secret files. The Keycloak DB and admin passwords are random; the client secrets are intentionally hardcoded in `docker/keycloak/iot-realm.json` (see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)) and must be written verbatim into the secret files:
 
 ```sh
-# Keycloak DB password
+# Random passwords for the Keycloak DB and admin user
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_db_password.txt
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_admin_password.txt
 
-# Client secrets — must match iot-realm.json → controller-client.secret / lstm-client.secret
-echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
-echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
-
-# Write the generated values into iot-realm.json
-KC_CTRL_SECRET="$(cat ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt)"
-KC_LSTM_SECRET="$(cat ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt)"
-sed -i \
-  -e "s/\"secret\": \"controller-client-secret\"/\"secret\": \"$KC_CTRL_SECRET\"/" \
-  -e "s/\"secret\": \"lstm-client-secret\"/\"secret\": \"$KC_LSTM_SECRET\"/" \
-  ~/API-Rpi16GB/docker/keycloak/iot-realm.json
+# Client secrets — must match the hardcoded values in iot-realm.json verbatim
+echo "sc_controller_client" > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
+echo "sc_lstm_client"       > ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
 
 chmod 600 ~/API-Rpi16GB/docker/secrets/keycloak_*.txt
 ```
+
+If a client secret is rotated in `iot-realm.json`, update the corresponding `.txt` file with the same value and restart Keycloak (or push the new secret via Admin API).
 
 ### 1.9 Provision TLS Certificates
 
@@ -196,11 +191,11 @@ Verify Keycloak and the realm import completed successfully:
 docker compose logs keycloak | grep -E "started|imported|ERROR"
 
 # Realm endpoint must respond
-curl -s http://localhost:8080/realms/iot | jq '{realm: .realm, sslRequired: .sslRequired}'
-# Expected: { "realm": "iot", "sslRequired": "all" }
+curl -s http://localhost:8080/auth/realms/iot | jq '{realm: .realm, sslRequired: .sslRequired}'
+# Expected: { "realm": "iot", "sslRequired": "external" }
 
 # Test login with the built-in test user
-curl -s -X POST http://localhost:8080/realms/iot/protocol/openid-connect/token \
+curl -s -X POST http://localhost:8080/auth/realms/iot/protocol/openid-connect/token \
   -d "grant_type=password" \
   -d "client_id=dashboard-client" \
   -d "username=iotuser01" \
