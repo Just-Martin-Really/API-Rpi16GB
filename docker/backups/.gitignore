@@ -1,0 +1,4 @@
+# Backup-Dateien nie committen
+*.sql
+*.sql.gz
+*.dump

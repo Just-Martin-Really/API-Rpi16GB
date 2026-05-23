@@ -1,0 +1,86 @@
+{
+  "realm": "iot",
+  "id": "iot",
+  "enabled": true,
+  "sslRequired": "all",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      { "name": "dashboard-user",    "composite": false, "clientRole": false },
+      { "name": "admin-user",        "composite": false, "clientRole": false },
+      { "name": "controller-ingest", "composite": false, "clientRole": false },
+      { "name": "lstm-control",      "composite": false, "clientRole": false }
+    ]
+  },
+  "users": [
+    {
+      "username": "iotuser01",
+      "enabled": true,
+      "email": "iotuser01@lab.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["dashboard-user"]
+    },
+    {
+      "username": "service-account-controller-client",
+      "enabled": true,
+      "serviceAccountClientId": "controller-client",
+      "realmRoles": ["controller-ingest"]
+    },
+    {
+      "username": "service-account-lstm-client",
+      "enabled": true,
+      "serviceAccountClientId": "lstm-client",
+      "realmRoles": ["lstm-control"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "dashboard-client",
+      "name": "Dashboard Client",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["https://www.lab.local/*"],
+      "webOrigins": ["https://www.lab.local"],
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "controller-client",
+      "name": "Controller Client",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "sc_controller_cliet",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "lstm-client",
+      "name": "LSTM Client",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "sc_lstm_cliet",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect"
+    }
+  ]
+}
