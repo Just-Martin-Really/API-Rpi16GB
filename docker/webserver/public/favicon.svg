@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#084298"/>
+      <stop offset="70%" style="stop-color:#0d6efd"/>
+      <stop offset="100%" style="stop-color:#3d8bfd"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="6" fill="url(#bg)"/>
+  <!-- CPU body -->
+  <rect x="9" y="9" width="14" height="14" rx="2" fill="none" stroke="#ffc107" stroke-width="1.8"/>
+  <!-- inner fill -->
+  <rect x="11.5" y="11.5" width="9" height="9" rx="1" fill="#ffc107" opacity="0.25"/>
+  <!-- pins top -->
+  <line x1="12.5" y1="9"  x2="12.5" y2="6.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="16"   y1="9"  x2="16"   y2="6.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="19.5" y1="9"  x2="19.5" y2="6.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- pins bottom -->
+  <line x1="12.5" y1="23" x2="12.5" y2="25.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="16"   y1="23" x2="16"   y2="25.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="19.5" y1="23" x2="19.5" y2="25.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- pins left -->
+  <line x1="9" y1="12.5" x2="6.5" y2="12.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="9" y1="16"   x2="6.5" y2="16"   stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="9" y1="19.5" x2="6.5" y2="19.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <!-- pins right -->
+  <line x1="23" y1="12.5" x2="25.5" y2="12.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="23" y1="16"   x2="25.5" y2="16"   stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="23" y1="19.5" x2="25.5" y2="19.5" stroke="#ffc107" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

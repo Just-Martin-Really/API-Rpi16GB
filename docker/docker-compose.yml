@@ -106,10 +106,13 @@ services:
       # TLS cert + key are provisioned on the host by the CA setup step
       - /etc/ssl/backend/backend.crt:/etc/nginx/ssl/backend.crt:ro
       - /etc/ssl/backend/backend.key:/etc/nginx/ssl/backend.key:ro
+      # Dashboard static files served directly by nginx
+      - ./webserver/public:/usr/share/nginx/dashboard:ro
     networks:
       app-net:
         aliases:
           - backend.lab.local
+          - www.lab.local
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
       interval: 10s
@@ -118,6 +121,7 @@ services:
       start_period: 15s
     depends_on:
       - backend
+      - keycloak
 
   # ── MQTT broker ────────────────────────────────────────────────────────────
   mosquitto:

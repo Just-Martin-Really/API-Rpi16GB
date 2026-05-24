@@ -41,11 +41,18 @@ server {
         proxy_set_header Host $host;
     }
 
+    # Keycloak Identity Provider — browser loads keycloak.js and performs
+    # the OIDC authorization code flow through this prefix.
     location /auth/ {
-        limit_req zone=api burst=5 nodelay;
-        proxy_pass http://backend:8080;
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://keycloak:8080/auth/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffer_size          128k;
+        proxy_buffers              4 256k;
+        proxy_busy_buffers_size    256k;
     }
 
     location /api/internal/ {
@@ -60,5 +67,13 @@ server {
         proxy_pass http://backend:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Dashboard static files (index.html, CSS, JS, favicon).
+    # Served directly by nginx from a bind-mounted public/ directory.
+    location / {
+        root   /usr/share/nginx/dashboard;
+        index  index.html;
+        try_files $uri $uri/ /index.html;
     }
 }
