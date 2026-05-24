@@ -7,6 +7,7 @@ networks:
 volumes:
   postgres_data:
   keycloak_db_data:
+  prometheus_data:
 
 secrets:
   db_password:
@@ -29,6 +30,8 @@ secrets:
     file: ./secrets/keycloak_admin_password.txt
   keycloak_lstm_secret:
     file: ./secrets/keycloak_lstm_secret.txt
+  db_exporter_password:
+    file: ./secrets/db_exporter_password.txt
 
 services:
 
@@ -245,6 +248,69 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+
+  # ── Prometheus (Metric scraping, internal only) ──────────────────────────────
+  # Scrape config in ./prometheus/prometheus.yml. Port 9090 deliberately not
+  # exposed to the host: Prometheus is reached via Grafana, which terminates
+  # auth. node_exporter runs on the host network namespace so it can report
+  # real CPU / RAM / disk / temperature from the Pi, not container values.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app-net
+    # No depends_on by design: Prometheus needs to start even when the rest
+    # of the stack is broken — that is precisely when you want metrics. It
+    # retries scrapes on its own scrape_interval, so a target being down at
+    # startup is harmless.
+
+  # ── node_exporter (host-level CPU / RAM / disk / temperature) ───────────────
+  # Runs on the host network namespace so /proc, /sys and CPU temp report the
+  # Pi's real values rather than container-scoped ones. Scraped by Prometheus
+  # via host.docker.internal:9100 (see prometheus extra_hosts).
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:v1.8.2
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.hwmon
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+
+  # ── postgres_exporter (sensor-DB metrics) ────────────────────────────────────
+  # Connects as postgres_exporter_user (pg_monitor role) which is created in
+  # ./postgres/init.sql. Password comes from secrets/db_exporter_password.txt
+  # via the db_exporter_password secret.
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/sensor?sslmode=disable"
+      DATA_SOURCE_USER: postgres_exporter_user
+      DATA_SOURCE_PASS_FILE: /run/secrets/db_exporter_password
+    secrets:
+      - db_exporter_password
+    networks:
+      - app-net
+    depends_on:
+      - postgres
 
   # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────
   keycloak-db:

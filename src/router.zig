@@ -1,7 +1,9 @@
 const std = @import("std");
 const db = @import("db.zig");
 const auth = @import("auth.zig");
+const metrics = @import("metrics.zig");
 const health = @import("handlers/health.zig");
+const metrics_handler = @import("handlers/metrics.zig");
 const sensor = @import("handlers/sensor.zig");
 const actuator = @import("handlers/actuator.zig");
 const sensor_request = @import("handlers/sensor_request.zig");
@@ -19,12 +21,19 @@ pub fn dispatch(
     read_db: *db.Db,
     write_db: *db.Db,
     verifier: *auth.Verifier,
+    registry: *metrics.Registry,
 ) !void {
     const target = request.head.target;
     const method = request.head.method;
 
     if (std.mem.eql(u8, target, "/health")) {
         return health.handle(request);
+    }
+
+    // /metrics is unauthenticated. Prometheus scrapes from inside app-net and
+    // has no JWT client; nginx never proxies this path.
+    if (std.mem.eql(u8, target, "/metrics") and method == .GET) {
+        return metrics_handler.handle(request, allocator, registry);
     }
 
     if (!std.mem.startsWith(u8, target, "/api/")) {
@@ -102,6 +111,23 @@ fn resolveRoute(path: []const u8, method: std.http.Method) ?Route {
 fn stripQuery(target: []const u8) []const u8 {
     const idx = std.mem.indexOfScalar(u8, target, '?') orelse return target;
     return target[0..idx];
+}
+
+/// Classify a request to a metrics label without invoking the handler.
+/// Called by server.zig before dispatch so that timing still works when the
+/// handler errors out. Unknown paths and method-not-allowed cases fall
+/// through to `.unknown`.
+pub fn routeFor(target: []const u8, method: std.http.Method) metrics.Route {
+    const path = stripQuery(target);
+    if (std.mem.eql(u8, path, "/health")) return .health;
+    if (std.mem.eql(u8, path, "/metrics") and method == .GET) return .metrics;
+    const route = resolveRoute(path, method) orelse return .unknown;
+    return switch (route.kind) {
+        .sensor_get => .sensor_get,
+        .sensor_post => .sensor_post,
+        .actuator_post => .actuator_post,
+        .sensor_request_post => .sensor_request_post,
+    };
 }
 
 fn respondJson(request: *std.http.Server.Request, status: std.http.Status, body: []const u8) !void {
