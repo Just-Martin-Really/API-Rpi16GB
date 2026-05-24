@@ -32,6 +32,8 @@ secrets:
     file: ./secrets/keycloak_lstm_secret.txt
   db_exporter_password:
     file: ./secrets/db_exporter_password.txt
+  keycloak_controller_secret:
+    file: ./secrets/keycloak_controller_secret.txt
 
 services:
 
@@ -185,11 +187,14 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
       API_BASE_URL: https://nginx:8443
+      KEYCLOAK_TOKEN_URL: https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
+      CONTROLLER_CLIENT_ID: controller-client
+      CONTROLLER_CLIENT_SECRET_FILE: /run/secrets/keycloak_controller_secret
     secrets:
       - mqtt_controller_user
       - mqtt_controller_password
       - ca_cert
-      - api_key
+      - keycloak_controller_secret
     networks:
       - app-net
       - sensor-net
@@ -198,6 +203,8 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_started
+      keycloak:
+        condition: service_healthy
 
   # ── Webserver ─────────────────────────────────────────
   webserver:
