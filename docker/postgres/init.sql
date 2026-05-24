@@ -91,3 +91,13 @@ GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
 CREATE USER postgres_exporter_user;
 GRANT CONNECT ON DATABASE sensor TO postgres_exporter_user;
 GRANT pg_monitor TO postgres_exporter_user;
+
+-- Grafana read-only user: used by the Postgres datasource in Grafana to
+-- query sensor_data and sensor_data_archive for the "Sensor-Daten" dashboard.
+-- Kept distinct from iot_read_user so its credentials can be rotated
+-- independently and so it cannot accidentally be granted write access.
+CREATE USER grafana_read_user;
+GRANT CONNECT ON DATABASE sensor TO grafana_read_user;
+GRANT USAGE ON SCHEMA public TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data_archive TO grafana_read_user;

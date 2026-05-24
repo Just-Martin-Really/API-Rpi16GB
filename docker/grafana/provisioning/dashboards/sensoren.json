@@ -1,0 +1,71 @@
+{
+  "uid": "sensoren",
+  "title": "Sensor-Daten (direkt aus Postgres)",
+  "tags": ["sensor", "postgres"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "sensor_id",
+        "label": "Sensor",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "postgres" },
+        "query": "SELECT DISTINCT sensor_id FROM sensor_data ORDER BY sensor_id",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": "%",
+        "current": { "selected": false, "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Messwerte über Zeit",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "rawSql": "SELECT recorded_at AS \"time\", sensor_id AS metric, value FROM sensor_data WHERE $__timeFilter(recorded_at) AND sensor_id LIKE ANY (ARRAY[${sensor_id:sqlstring}]) ORDER BY sensor_id, recorded_at",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Letzter Messwert pro Sensor",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "rawSql": "SELECT DISTINCT ON (sensor_id) sensor_id AS metric, value FROM sensor_data WHERE sensor_id LIKE ANY (ARRAY[${sensor_id:sqlstring}]) ORDER BY sensor_id, recorded_at DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Anzahl Messwerte (letzte 24h)",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS value FROM sensor_data WHERE recorded_at >= NOW() - INTERVAL '24 hours' AND sensor_id LIKE ANY (ARRAY[${sensor_id:sqlstring}])",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ]
+}

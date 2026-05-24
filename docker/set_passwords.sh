@@ -7,6 +7,7 @@ set -e
 WRITE_PW=$(cat ./secrets/db_write_password.txt)
 READ_PW=$(cat ./secrets/db_read_password.txt)
 EXPORTER_PW=$(cat ./secrets/db_exporter_password.txt)
+GRAFANA_PW=$(cat ./secrets/db_grafana_password.txt)
 MQTT_CTRL_USER=$(cat ./secrets/mqtt_controller_user.txt)
 MQTT_CTRL_PASS=$(cat ./secrets/mqtt_controller_password.txt)
 MQTT_SENSOR01_PASS=$(cat ./secrets/mqtt_sensor01_password.txt)
@@ -18,6 +19,8 @@ docker compose exec postgres psql -U postgres -d sensor \
   -c "ALTER USER iot_read_user WITH PASSWORD '$READ_PW';"
 docker compose exec postgres psql -U postgres -d sensor \
   -c "ALTER USER postgres_exporter_user WITH PASSWORD '$EXPORTER_PW';"
+docker compose exec postgres psql -U postgres -d sensor \
+  -c "ALTER USER grafana_read_user WITH PASSWORD '$GRAFANA_PW';"
 
 echo "==> Generating MQTT passwd file"
 # -c creates a fresh file with the first user; -b appends without prompting
