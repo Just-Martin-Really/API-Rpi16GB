@@ -249,7 +249,7 @@ chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 
 ### 9 — TLS-Zertifikate erzeugen
 
-Erzeugt eine lokale CA, signiert ein Zertifikat für nginx (`backend.lab.local`) und eines für den MQTT Broker:
+Erzeugt eine lokale CA, signiert ein Zertifikat für nginx (`www.lab.local`) und eines für den MQTT Broker:
 
 ```sh
 cd ~/API-Rpi16GB

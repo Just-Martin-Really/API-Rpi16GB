@@ -130,7 +130,7 @@ If a client secret is rotated in `iot-realm.json`, update the corresponding `.tx
 
 ### 1.9 Provision TLS Certificates
 
-Run the TLS setup script. It creates a local CA, signs a cert for nginx (`backend.lab.local`) and a cert for the MQTT broker, and drops the CA cert into `docker/secrets/` for the controller container.
+Run the TLS setup script. It creates a local CA, signs a cert for nginx (`www.lab.local`) and a cert for the MQTT broker, and drops the CA cert into `docker/secrets/` for the controller container.
 
 ```sh
 cd ~/API-Rpi16GB
