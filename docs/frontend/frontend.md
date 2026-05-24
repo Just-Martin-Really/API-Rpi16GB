@@ -171,8 +171,3 @@ Live mode activates when the `date-to` field is empty. The dashboard:
 
 Live mode stops when the user sets a `date-to` value or logs out.
 
-## Connecting a new sensor
-
-No frontend changes are needed. The backend stores all sensors in the same `sensor_data` table. `normalizePayload()` merges rows by `recorded_at` timestamp regardless of `sensor_id`. A second physical sensor connected to the same MQTT topic will appear on the chart automatically once the backend stores its data.
-
-If multiple sensors with different IDs report at the same millisecond, the last one wins in the client-side merge. For multi-sensor setups the grouped server format is cleaner because the server can do the merge with a proper JOIN.
