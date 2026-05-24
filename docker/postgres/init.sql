@@ -83,3 +83,11 @@ CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON sensor_data_archive (archi
 GRANT DELETE ON TABLE sensor_data TO iot_write_user;
 GRANT SELECT, INSERT, DELETE ON TABLE sensor_data_archive TO iot_write_user;
 GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
+
+-- Prometheus exporter user: read-only, used by postgres_exporter to publish
+-- DB-level metrics (connections, transactions, table sizes, replication lag).
+-- pg_monitor is the canonical role for this purpose; it grants SELECT on
+-- pg_stat_* views without giving access to row data.
+CREATE USER postgres_exporter_user;
+GRANT CONNECT ON DATABASE sensor TO postgres_exporter_user;
+GRANT pg_monitor TO postgres_exporter_user;

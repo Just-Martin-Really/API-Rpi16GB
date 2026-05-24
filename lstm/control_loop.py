@@ -26,15 +26,44 @@ load_dotenv(Path(__file__).parent / ".env")
 from api_client import ApiClient
 from decide import desired_state, diff_state
 from forecast import forecast as run_forecast, latest_window, load_artifacts, scale, unscale
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 TARGET_LOW = float(os.environ.get("TARGET_LOW", "19.0"))
 TARGET_HIGH = float(os.environ.get("TARGET_HIGH", "23.0"))
 LOOKAHEAD = int(os.environ.get("LOOKAHEAD", "30"))
 LOOP_SECONDS = int(os.environ.get("LOOP_SECONDS", "60"))
+METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))
 HEATER_ID = os.environ.get("ACTUATOR_HEATER_ID", "heater01")
 COOLER_ID = os.environ.get("ACTUATOR_COOLER_ID", "cooler01")
 
 ROLE_TO_ACTUATOR = {"heater": HEATER_ID, "cooler": COOLER_ID}
+
+# Prometheus metrics. start_http_server() spins up a daemon thread that serves
+# /metrics on METRICS_PORT against the default registry, so just defining the
+# instruments here is enough — observing or incrementing them anywhere in the
+# loop will show up on the scrape.
+iterations_total = Counter(
+    "lstm_iterations_total",
+    "Number of control-loop iterations executed.",
+    ["outcome"],
+)
+inference_duration = Histogram(
+    "lstm_inference_duration_seconds",
+    "Wall-clock time spent running forecast() per iteration.",
+)
+predictions_total = Counter(
+    "lstm_predictions_total",
+    "Number of forecast points emitted (LOOKAHEAD per iteration).",
+)
+last_prediction_value = Gauge(
+    "lstm_last_prediction_celsius",
+    "Most recent peak of the forecast window (max over LOOKAHEAD).",
+)
+commands_sent_total = Counter(
+    "lstm_commands_sent_total",
+    "Actuator commands dispatched by role and command.",
+    ["role", "command"],
+)
 
 
 def log(msg):
@@ -43,8 +72,11 @@ def log(msg):
 
 def iteration(model, mean, std, client, last_sent, dry_run):
     window = latest_window()
-    fc_scaled = run_forecast(model, scale(window, mean, std), LOOKAHEAD)
+    with inference_duration.time():
+        fc_scaled = run_forecast(model, scale(window, mean, std), LOOKAHEAD)
     fc = unscale(fc_scaled, mean, std)
+    predictions_total.inc(LOOKAHEAD)
+    last_prediction_value.set(float(fc.max()))
     log(f"forecast {LOOKAHEAD}min  min={fc.min():.2f}  max={fc.max():.2f}  "
         f"target=[{TARGET_LOW},{TARGET_HIGH}]")
     desired = desired_state(fc, TARGET_LOW, TARGET_HIGH, LOOKAHEAD)
@@ -60,6 +92,7 @@ def iteration(model, mean, std, client, last_sent, dry_run):
         else:
             client.post_actuator_command(actuator_id, command, issued_by="machine")
             log(f"sent: actuator_id={actuator_id} command={command} issued_by=machine")
+        commands_sent_total.labels(role=role, command=command).inc()
     new_state = dict(last_sent)
     new_state.update(to_send)
     return new_state
@@ -77,13 +110,20 @@ def main():
     model, mean, std = load_artifacts()
     client = None if args.dry_run else ApiClient()
     last_sent = {}
+
+    # --once is for cron / smoke tests; no point opening a metrics port there.
+    if not args.once:
+        start_http_server(METRICS_PORT)
+        log(f"metrics endpoint listening on :{METRICS_PORT}/metrics")
     log(f"starting loop  interval={LOOP_SECONDS}s  dry_run={args.dry_run}")
 
     try:
         while True:
             try:
                 last_sent = iteration(model, mean, std, client, last_sent, args.dry_run)
+                iterations_total.labels(outcome="ok").inc()
             except Exception as e:
+                iterations_total.labels(outcome="error").inc()
                 log(f"iteration failed: {e!r}")
             if args.once:
                 return

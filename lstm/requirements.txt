@@ -5,4 +5,5 @@ scikit-learn
 plotext
 python-dotenv
 requests
+prometheus-client>=0.20
 pytest

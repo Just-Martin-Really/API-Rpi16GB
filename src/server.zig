@@ -4,6 +4,7 @@ const net = std.Io.net;
 const router = @import("router.zig");
 const db = @import("db.zig");
 const auth = @import("auth.zig");
+const metrics = @import("metrics.zig");
 
 const WorkerArgs = struct {
     io: Io,
@@ -12,6 +13,7 @@ const WorkerArgs = struct {
     write_connstr: [*:0]const u8,
     read_connstr: [*:0]const u8,
     verifier: *auth.Verifier,
+    registry: *metrics.Registry,
 };
 
 pub fn run(
@@ -21,6 +23,7 @@ pub fn run(
     write_connstr: [*:0]const u8,
     read_connstr: [*:0]const u8,
     verifier: *auth.Verifier,
+    registry: *metrics.Registry,
 ) !void {
     const address = try net.IpAddress.parse("0.0.0.0", port);
     var listener = try address.listen(io, .{ .reuse_address = true });
@@ -40,6 +43,7 @@ pub fn run(
             .write_connstr = write_connstr,
             .read_connstr = read_connstr,
             .verifier = verifier,
+            .registry = registry,
         };
         const t = std.Thread.spawn(.{}, connectionWorker, .{args}) catch |err| {
             std.log.err("thread spawn failed: {}", .{err});
@@ -81,7 +85,27 @@ fn handleConnection(args: WorkerArgs) !void {
             error.HttpConnectionClosing => return,
             else => return err,
         };
-        router.dispatch(io, &request, arena.allocator(), &read_db, &write_db, args.verifier) catch |err| {
+
+        // Classify the route up front so the metrics defer still records
+        // duration when the handler errors out partway through.
+        const route = router.routeFor(request.head.target, request.head.method);
+        const start = std.Io.Clock.now(.awake, io);
+        defer {
+            const end = std.Io.Clock.now(.awake, io);
+            const elapsed = end.nanoseconds - start.nanoseconds;
+            const elapsed_u64: u64 = if (elapsed < 0) 0 else @intCast(elapsed);
+            args.registry.observe(route, elapsed_u64);
+        }
+
+        router.dispatch(
+            io,
+            &request,
+            arena.allocator(),
+            &read_db,
+            &write_db,
+            args.verifier,
+            args.registry,
+        ) catch |err| {
             std.log.err("handler error: {}", .{err});
             return err;
         };

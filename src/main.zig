@@ -1,6 +1,7 @@
 const std = @import("std");
 const server = @import("server.zig");
 const auth = @import("auth.zig");
+const metrics = @import("metrics.zig");
 const c = @cImport(@cInclude("stdio.h"));
 
 fn readSecret(path: [*:0]const u8, buf: []u8) ![:0]u8 {
@@ -41,8 +42,10 @@ pub fn main(init: std.process.Init) !void {
         std.log.warn("JWKS prefetch failed ({s}); will retry on first request", .{@errorName(err)});
     };
 
+    var registry = metrics.Registry.init(io);
+
     const port: u16 = 8080;
     std.log.info("starting backend on :{d} (issuer={s})", .{ port, issuer });
 
-    try server.run(io, allocator, port, write_connstr, read_connstr, &verifier);
+    try server.run(io, allocator, port, write_connstr, read_connstr, &verifier, &registry);
 }
