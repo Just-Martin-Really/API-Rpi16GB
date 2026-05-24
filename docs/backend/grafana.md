@@ -70,35 +70,43 @@ sh ./set_passwords.sh
 just re-applies the `ALTER USER grafana_read_user WITH PASSWORD ...` line
 alongside the existing ones.
 
-Grafana is reachable at `http://<pi-ip>:3000` during development. The
-`3000:3000` host-port mapping in `docker-compose.yml` is **temporary**, see
-below.
+Grafana is reachable at `https://www.lab.local/grafana/` through nginx.
+There is no direct host port for Grafana; all access goes through the
+nginx TLS terminator.
 
 ## OIDC login flow
 
 ```
-Browser → http://pi:3000/login              (Grafana login page)
+Browser → https://www.lab.local/grafana/login          (Grafana login page)
        ← redirect → /auth/realms/iot/protocol/openid-connect/auth
-                    (Keycloak login form)
-       → POST credentials → Keycloak
-       ← redirect with code → http://pi:3000/login/generic_oauth?code=...
-       → Grafana exchanges code for tokens
+                    (Keycloak login form, same nginx host)
+       → POST credentials → Keycloak (via nginx /auth/)
+       ← redirect with code → https://www.lab.local/grafana/login/generic_oauth?code=...
+       → Grafana exchanges code for tokens at http://keycloak:8080/...
+         (internal, no TLS, no nginx)
        → Grafana reads realm_access.roles from the access token
        → role_attribute_path JMESPath assigns Editor / Viewer / GrafanaAdmin
 ```
 
-The redirect URI in the `grafana-client` Keycloak client is intentionally a
-list of three patterns so the same realm import works in three contexts:
+`GF_AUTH_GENERIC_OAUTH_AUTH_URL` points at the public hostname because the
+browser performs that redirect. `GF_AUTH_GENERIC_OAUTH_TOKEN_URL` and
+`GF_AUTH_GENERIC_OAUTH_API_URL` stay on the internal `http://keycloak:8080`
+endpoint: those are server-to-server calls that don't need to traverse
+nginx or be terminated by TLS, and keeping them internal avoids mounting
+the CA cert into Grafana just for this hop.
+
+The redirect URIs in the `grafana-client` Keycloak client list three
+patterns so the same realm import works in three contexts:
 
 | Pattern                          | When it matches                                              |
 |----------------------------------|--------------------------------------------------------------|
-| `http://localhost:3000/*`        | dev access via the temporary host-port mapping               |
-| `https://backend.lab.local/*`    | current Pi hostname before Amica's `www.lab.local` switch    |
-| `https://www.lab.local/*`        | future production hostname (Amica's PR)                      |
+| `https://www.lab.local/*`        | production access through nginx                              |
+| `https://backend.lab.local/*`    | legacy hostname (kept for tools still pointing at it)        |
+| `http://localhost:3000/*`        | left in place for emergency direct access if nginx is broken |
 
-When Amica's nginx route lands and Grafana moves behind `/grafana/`, only
-two things need to change: drop the `3000:3000` port from compose, and set
-`GF_SERVER_ROOT_URL` to `https://www.lab.local/grafana/`. No realm changes.
+Direct access on port 3000 only works if someone temporarily re-adds the
+`3000:3000` host port mapping to the grafana service. By default Grafana is
+only reachable through nginx.
 
 ## How to add a dashboard
 
@@ -114,9 +122,6 @@ The Grafana folder used by all provisioned dashboards is `API-Rpi16GB`.
 
 ## What is intentionally not yet implemented
 
-- **nginx route + TLS termination** for `/grafana/`. That belongs to
-  Amica's task `869dcz0np` (nginx, TLS, hostname switch). Until then, port
-  3000 is mapped to the host.
 - **Actuator dashboard data**. Panels reference `controller_*` metrics
   that don't exist yet. Wait for the controller.py `/metrics` follow-up
   PR, then the panels populate without any Grafana change. The dashboard
@@ -126,29 +131,36 @@ The Grafana folder used by all provisioned dashboards is `API-Rpi16GB`.
 
 ## Verification
 
-After the container is healthy:
+The Grafana admin API is reachable from inside the prometheus container
+(same `app-net`, same image family with `wget`) without needing to hit it
+through nginx. From `docker/` on the Pi:
 
 ```sh
+ADMIN_PW=$(cat secrets/grafana_admin_password.txt)
+
 # Datasources
-curl -s -u admin:"$(cat docker/secrets/grafana_admin_password.txt)" \
-  http://localhost:3000/api/datasources | jq '.[] | {name, type, url}'
+docker compose exec prometheus wget -qO- \
+  --user=admin --password="$ADMIN_PW" \
+  http://grafana:3000/api/datasources
 
 # Dashboards
-curl -s -u admin:"$(cat docker/secrets/grafana_admin_password.txt)" \
-  http://localhost:3000/api/search?type=dash-db | jq '.[] | {uid, title}'
+docker compose exec prometheus wget -qO- \
+  --user=admin --password="$ADMIN_PW" \
+  http://grafana:3000/api/search?type=dash-db
 
-# Test Prometheus query through Grafana
-curl -s -u admin:"$(cat docker/secrets/grafana_admin_password.txt)" \
-  'http://localhost:3000/api/datasources/proxy/uid/prometheus/api/v1/query?query=up' \
-  | jq '.data.result | length'
+# Prometheus query through Grafana's proxy
+docker compose exec prometheus wget -qO- \
+  --user=admin --password="$ADMIN_PW" \
+  'http://grafana:3000/api/datasources/proxy/uid/prometheus/api/v1/query?query=up'
 ```
 
-Expected output of the first two: six dashboards (`system-health`,
-`service-health`, `lstm`, `postgres`, `sensoren`, `actuator`) and two
-datasources. The third should return the number of scrape targets that
-Prometheus considers up — five once everything is running
-(prometheus self, backend, lstm, postgres_exporter, node_exporter).
+Expected: six dashboards (`system-health`, `service-health`, `lstm`,
+`postgres`, `sensoren`, `actuator`) and two datasources (`Prometheus`,
+`Postgres`). The third call should list the scrape targets Prometheus
+considers up — five once everything is running (prometheus self, backend,
+lstm, postgres_exporter, node_exporter).
 
-For the OIDC flow, open `http://<pi-ip>:3000/` in a browser, click "Sign in
-with Keycloak", log in as `iotuser01` (`Test1234!`), and verify the role
-shown in the top-right is "Editor".
+For the OIDC flow, open `https://www.lab.local/grafana/` in a browser,
+click "Sign in with Keycloak", log in as `iotuser01` (`Test1234!`), and
+verify the role shown in the top-right is "Editor". `admin-user` realm
+role lifts that to "GrafanaAdmin".

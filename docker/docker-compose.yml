@@ -328,10 +328,11 @@ services:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
     environment:
-      # Where Grafana believes it lives. Updated to https://www.lab.local/grafana/
-      # once Amica's nginx route is in.
-      GF_SERVER_ROOT_URL: "http://localhost:3000/"
-      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      # Public URL Grafana generates absolute links and redirect URIs for.
+      # serve_from_sub_path=true makes Grafana itself respond at /grafana/...
+      # so nginx can preserve the prefix upstream.
+      GF_SERVER_ROOT_URL: "https://www.lab.local/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       # Admin credentials. _FILE suffix is Grafana's documented Docker
       # convention for reading any GF_* setting from disk.
       GF_SECURITY_ADMIN_USER: admin
@@ -339,16 +340,20 @@ services:
       # Disable anonymous access and sign-up (per ticket requirement).
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # Keycloak OIDC. Client secret read from file; the rest is plain config
-      # so it's reviewable in git. Internal HTTP to keycloak avoids the TLS
-      # cert dance inside the Docker network.
+      # Keycloak OIDC.
+      #
+      # AUTH_URL is the URL the user's browser is redirected to, so it must
+      # be reachable from the LAN under the public hostname. TOKEN_URL and
+      # API_URL are server-to-server calls from Grafana, kept on the
+      # internal HTTP endpoint so we don't have to mount ca_cert into
+      # Grafana just for these.
       GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
       GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
       GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
       GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana-client
       GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE: /run/secrets/grafana_oidc_client_secret
       GF_AUTH_GENERIC_OAUTH_SCOPES: "openid email profile"
-      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/auth"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "https://www.lab.local/auth/realms/iot/protocol/openid-connect/auth"
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token"
       GF_AUTH_GENERIC_OAUTH_API_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/userinfo"
       # Map Keycloak realm roles to Grafana roles. admin-user → full admin,
@@ -362,9 +367,6 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    ports:
-      # TEMP: remove this once nginx routes /grafana/ to grafana:3000.
-      - "3000:3000"
     networks:
       - app-net
     depends_on:
