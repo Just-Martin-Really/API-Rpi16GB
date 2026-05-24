@@ -1,12 +1,12 @@
 # Frontend Dashboard
 
-Browser-based dashboard for the IoT sensor system. Static files (HTML, CSS, JS, favicon) are served directly by the `nginx` reverse proxy container from a bind mount of `docker/webserver/public/`. Authenticates via Keycloak OIDC and visualises temperature and humidity readings from the Zig backend API.
+Browser-based dashboard for the IoT sensor system. Static files (HTML, CSS, JS, favicon) are served directly by the `nginx` reverse proxy container from a bind mount of `docker/dashboard/`. Authenticates via Keycloak OIDC and visualises temperature and humidity readings from the Zig backend API.
 
 ## What is done
 
 | Item | Status |
 |---|---|
-| `docker/webserver/public/` directory | done |
+| `docker/dashboard/` directory | done |
 | `index.html` — login state, logout button, chart, time picker | done |
 | `favicon.svg` (+ legacy `favicon.ico` reference) | done |
 | `style/style.css` | done |
@@ -14,7 +14,7 @@ Browser-based dashboard for the IoT sensor system. Static files (HTML, CSS, JS, 
 
 ## Backend contract
 
-The dashboard fetches `GET https://www.lab.local/api/v1/sensor-data?from=<iso>&to=<iso>` with an `Authorization: Bearer <token>` header. This endpoint lives in the Zig backend (`src/handlers/sensor.zig`, routed in `src/router.zig`), not in `server.js`. nginx routes `/api/` to the Zig backend service.
+The dashboard fetches `GET https://www.lab.local/api/v1/sensor-data?from=<iso>&to=<iso>` with an `Authorization: Bearer <token>` header. This endpoint lives in the Zig backend (`src/handlers/sensor.zig`, routed in `src/router.zig`). nginx routes `/api/` to the Zig backend service.
 
 The endpoint requires:
 - Audience: `dashboard-client`
@@ -26,7 +26,7 @@ Response is a JSON array of `{ id, sensor_id, value, unit, recorded_at }` rows. 
 ## File layout
 
 ```
-docker/webserver/public/
+docker/dashboard/
   index.html              Single-page app shell
   favicon.svg
   favicon.ico             (0-byte legacy file, referenced as alternate icon)

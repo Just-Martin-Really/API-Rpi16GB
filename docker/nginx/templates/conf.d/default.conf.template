@@ -72,13 +72,6 @@ server {
         proxy_set_header Connection "upgrade";
     }
 
-    location /api/internal/ {
-        limit_req zone=api burst=10 nodelay;
-        proxy_pass http://webserver:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
     location /api/v1/ {
         limit_req zone=api burst=10 nodelay;
         proxy_pass http://backend:8080;
@@ -87,7 +80,7 @@ server {
     }
 
     # Dashboard static files (index.html, CSS, JS, favicon).
-    # Served directly by nginx from a bind-mounted public/ directory.
+    # Served directly by nginx from a bind-mounted dashboard/ directory.
     location / {
         root   /usr/share/nginx/dashboard;
         index  index.html;

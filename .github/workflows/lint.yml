@@ -15,22 +15,6 @@ jobs:
         with:
           src: "./docker/controller ./lstm"
 
-  node:
-    name: Node (syntax + audit)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docker/webserver
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Syntax check
-        run: node --check server.js
-      - name: npm audit (high+ only)
-        run: npm audit --omit=dev --audit-level=high
-
   shell:
     name: Shell (shellcheck)
     runs-on: ubuntu-latest
@@ -52,7 +36,6 @@ jobs:
           - docker/controller/Dockerfile
           - docker/lstm/Dockerfile
           - docker/seeder/Dockerfile
-          - docker/webserver/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: hadolint/hadolint-action@v3.1.0

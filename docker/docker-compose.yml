@@ -23,8 +23,6 @@ secrets:
     file: ./secrets/mqtt_controller_password.txt
   ca_cert:
     file: ./secrets/ca_cert.txt
-  api_key:
-    file: ./secrets/api_key.txt
   keycloak_db_password:
     file: ./secrets/keycloak_db_password.txt
   keycloak_admin_password:
@@ -119,7 +117,7 @@ services:
       - /etc/ssl/backend/backend.crt:/etc/nginx/ssl/backend.crt:ro
       - /etc/ssl/backend/backend.key:/etc/nginx/ssl/backend.key:ro
       # Dashboard static files served directly by nginx
-      - ./webserver/public:/usr/share/nginx/dashboard:ro
+      - ./dashboard:/usr/share/nginx/dashboard:ro
     networks:
       app-net:
         aliases:
@@ -211,25 +209,6 @@ services:
         condition: service_started
       keycloak:
         condition: service_healthy
-
-  # ── Webserver ─────────────────────────────────────────
-  webserver:
-    build:
-      context: ./webserver
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: sensor
-      DB_USER: iot_write_user
-    secrets:
-      - db_write_password
-      - api_key
-    networks:
-      - app-net
-    depends_on:
-      - postgres
 
   # ── LSTM control loop (predict + post heater/cooler commands) ─────────────
   lstm:
