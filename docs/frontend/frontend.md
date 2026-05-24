@@ -1,6 +1,6 @@
 # Frontend Dashboard
 
-Browser-based dashboard for the IoT sensor system. Served as static files by the `webserver` container (nginx + Node.js). Authenticates via Keycloak OIDC and visualises temperature and humidity readings from the backend API.
+Browser-based dashboard for the IoT sensor system. Static files (HTML, CSS, JS, favicon) are served directly by the `nginx` reverse proxy container from a bind mount of `docker/webserver/public/`. Authenticates via Keycloak OIDC and visualises temperature and humidity readings from the Zig backend API.
 
 ## What is done
 
@@ -8,57 +8,33 @@ Browser-based dashboard for the IoT sensor system. Served as static files by the
 |---|---|
 | `docker/webserver/public/` directory | done |
 | `index.html` — login state, logout button, chart, time picker | done |
-| `favicon.ico` | done |
+| `favicon.svg` (+ legacy `favicon.ico` reference) | done |
 | `style/style.css` | done |
 | `script/frontend.js` — Keycloak init, login flow, fetch, chart, live mode, 401/403 handling | done |
-| `script/preview.js` — static mock for UI development (no server needed) | done |
 
-## What is still open
+## Backend contract
 
-`GET /api/sensordata` in `server.js` is stubbed. The route exists but the handler body is empty. It must:
+The dashboard fetches `GET https://www.lab.local/api/v1/sensor-data?from=<iso>&to=<iso>` with an `Authorization: Bearer <token>` header. This endpoint lives in the Zig backend (`src/handlers/sensor.zig`, routed in `src/router.zig`), not in `server.js`. nginx routes `/api/` to the Zig backend service.
 
-1. Parse and validate `from` / `to` ISO query params.
-2. Connect as `db_read_user` (not `db_write_user` — least privilege).
-3. Run `SELECT recorded_at, sensor_id, value, unit FROM sensor_data WHERE recorded_at BETWEEN $1 AND $2 ORDER BY recorded_at`.
-4. Return either the raw rows or a grouped format (`[{ timestamp, temperature, humidity }]`) based on the `?format=grouped` query param.
-5. Validate the bearer JWT before touching the DB (`authenticateToken` middleware, which is also missing).
+The endpoint requires:
+- Audience: `dashboard-client`
+- Realm role: `dashboard-user`
+- Query window via `from` / `to` ISO 8601 timestamps (either side may be omitted)
 
-Until that endpoint exists, the dashboard cannot load real data. The frontend itself requires no further changes.
+Response is a JSON array of `{ id, sensor_id, value, unit, recorded_at }` rows. The frontend's `normalizePayload()` groups two rows per timestamp (temperature + humidity) back together client-side.
 
 ## File layout
 
 ```
 docker/webserver/public/
   index.html              Single-page app shell
-  favicon.ico
+  favicon.svg
+  favicon.ico             (0-byte legacy file, referenced as alternate icon)
   style/
     style.css             All custom styles (CSS variables, navbar, chart wrapper, …)
   script/
-    frontend.js           Production dashboard (Keycloak + real API)
-    preview.js            Dev-only mock (no login, no API, browser-generated data)
+    frontend.js           Dashboard logic (Keycloak + real API)
 ```
-
-## Switching between preview and production mode
-
-`index.html` currently loads the mock:
-
-```html
-<!-- production (comment out for local UI work) -->
-<!-- <script src="https://www.lab.local/auth/js/keycloak.js"></script> -->
-<!-- <script src="script/frontend.js"></script> -->
-
-<!-- preview (remove before going live) -->
-<script src="script/preview.js"></script>
-```
-
-To activate the real dashboard, swap the comments:
-
-```html
-<script src="https://www.lab.local/auth/js/keycloak.js"></script>
-<script src="script/frontend.js"></script>
-```
-
-`preview.js` must be removed or its `<script>` tag deleted. Both scripts register a Chart.js instance on the same canvas — loading both breaks the page.
 
 ## Constants in frontend.js
 
@@ -68,7 +44,7 @@ To activate the real dashboard, swap the comments:
 | `KEYCLOAK_CONFIG.realm` | `iot` | Realm name |
 | `KEYCLOAK_CONFIG.clientId` | `dashboard-client` | OIDC public client |
 | `API_BASE` | `https://www.lab.local` | Backend base URL (through nginx) |
-| `SENSOR_DATA_ENDPOINT` | `${API_BASE}/api/sensordata` | Sensor data endpoint |
+| `SENSOR_DATA_ENDPOINT` | `${API_BASE}/api/v1/sensor-data` | Sensor data endpoint |
 | `LIVE_POLL_INTERVAL_MS` | `60000` | How often the live poller refetches (ms) |
 | `TOKEN_MIN_VALIDITY_SECONDS` | `70` | Minimum remaining token lifetime before a proactive refresh |
 | `TOKEN_REFRESH_INTERVAL_MS` | `60000` | How often the background refresh check runs (ms) |
