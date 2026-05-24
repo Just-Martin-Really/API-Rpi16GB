@@ -1,0 +1,19 @@
+# Provisioned Prometheus datasource. Grafana picks this up at start and
+# refreshes when the file changes (allowUiUpdates: false keeps users from
+# editing it through the UI so the source of truth stays in git).
+#
+# Reload by restarting the grafana container.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST

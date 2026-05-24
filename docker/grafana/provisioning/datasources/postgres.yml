@@ -1,0 +1,25 @@
+# Provisioned Postgres datasource for direct queries against sensor_data
+# and sensor_data_archive. Uses grafana_read_user (SELECT-only) which is
+# created in ../postgres/init.sql.
+#
+# The password is read from a file via secureJsonData. Grafana resolves
+# $__file{...} syntax against the secrets mounted into the container.
+
+apiVersion: 1
+
+datasources:
+  - name: Postgres
+    uid: postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: grafana_read_user
+    database: sensor
+    isDefault: false
+    editable: false
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: $__file{/run/secrets/db_grafana_password}

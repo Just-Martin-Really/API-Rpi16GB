@@ -8,6 +8,7 @@ volumes:
   postgres_data:
   keycloak_db_data:
   prometheus_data:
+  grafana_data:
 
 secrets:
   db_password:
@@ -32,6 +33,12 @@ secrets:
     file: ./secrets/keycloak_lstm_secret.txt
   db_exporter_password:
     file: ./secrets/db_exporter_password.txt
+  db_grafana_password:
+    file: ./secrets/db_grafana_password.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+  grafana_oidc_client_secret:
+    file: ./secrets/grafana_oidc_client_secret.txt
 
 services:
 
@@ -310,6 +317,59 @@ services:
     networks:
       - app-net
     depends_on:
+      - postgres
+
+  # ── Grafana (dashboards + OIDC) ──────────────────────────────────────────────
+  # Provisioned datasources + dashboards in ./grafana/provisioning/. Admin and
+  # OIDC client secrets come from file-based secrets so nothing sensitive
+  # lives in env vars or the compose file. The 3000:3000 host port mapping
+  # is TEMPORARY until Amica's nginx route (location /grafana/) lands; remove
+  # it in the same PR that adds the nginx block.
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    environment:
+      # Where Grafana believes it lives. Updated to https://www.lab.local/grafana/
+      # once Amica's nginx route is in.
+      GF_SERVER_ROOT_URL: "http://localhost:3000/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      # Admin credentials. _FILE suffix is Grafana's documented Docker
+      # convention for reading any GF_* setting from disk.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      # Disable anonymous access and sign-up (per ticket requirement).
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Keycloak OIDC. Client secret read from file; the rest is plain config
+      # so it's reviewable in git. Internal HTTP to keycloak avoids the TLS
+      # cert dance inside the Docker network.
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
+      GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana-client
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE: /run/secrets/grafana_oidc_client_secret
+      GF_AUTH_GENERIC_OAUTH_SCOPES: "openid email profile"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/auth"
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token"
+      GF_AUTH_GENERIC_OAUTH_API_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/userinfo"
+      # Map Keycloak realm roles to Grafana roles. admin-user → full admin,
+      # dashboard-user → Editor, everyone else → Viewer.
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(realm_access.roles[*], 'admin-user') && 'GrafanaAdmin' || contains(realm_access.roles[*], 'dashboard-user') && 'Editor' || 'Viewer'"
+      GF_AUTH_GENERIC_OAUTH_ALLOW_ASSIGN_GRAFANA_ADMIN: "true"
+    secrets:
+      - grafana_admin_password
+      - grafana_oidc_client_secret
+      - db_grafana_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      # TEMP: remove this once nginx routes /grafana/ to grafana:3000.
+      - "3000:3000"
+    networks:
+      - app-net
+    depends_on:
+      - prometheus
       - postgres
 
   # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────

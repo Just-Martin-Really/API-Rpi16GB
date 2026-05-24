@@ -81,6 +81,28 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "protocol": "openid-connect"
+    },
+    {
+      "clientId": "grafana-client",
+      "name": "Grafana Client",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "sc_grafana_client",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "https://www.lab.local/*",
+        "https://backend.lab.local/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "https://www.lab.local",
+        "https://backend.lab.local"
+      ],
+      "protocol": "openid-connect"
     }
   ]
 }
