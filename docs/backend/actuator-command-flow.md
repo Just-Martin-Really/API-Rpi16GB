@@ -18,7 +18,7 @@ The flow is decoupled by the `actuator_commands` table. The caller inserts a row
 
 ## Public endpoint
 
-`POST /api/v1/actuator-command` — see [API Reference](api.md#post-apiv1actuator-command). Authenticated with a dashboard JWT. Inserts one row into `actuator_commands` with `sent_at = NULL`.
+`POST /api/v1/actuator-command` — see [API Reference](api.md#post-apiv1actuator-command). Authenticated with a Keycloak access token whose audience is `lstm-client` and whose realm role is `lstm-control`. Inserts one row into `actuator_commands` with `sent_at = NULL`.
 
 ## Internal endpoints
 
@@ -74,7 +74,7 @@ Worst-case latency: poll interval (2 s) plus one publish round-trip. Under broke
 
 ## Operator scripts
 
-`scripts/cooler.sh on|off` and `scripts/heater.sh on|off` are thin wrappers around the public endpoint. They authenticate against `/auth/login`, then POST a single command. See `scripts/.env.example` for the required environment.
+`scripts/cooler.sh on|off` and `scripts/heater.sh on|off` are thin wrappers around the public endpoint. They fetch an access token from Keycloak's token endpoint via the client-credentials flow, then POST a single command. See `scripts/.env.example` for the required environment (token URL, client id, client secret, backend URL).
 
 ## Database schema
 

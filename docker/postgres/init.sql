@@ -27,27 +27,6 @@ GRANT CONNECT ON DATABASE sensor TO iot_read_user;
 GRANT USAGE  ON SCHEMA public TO iot_read_user;
 GRANT SELECT ON TABLE sensor_data TO iot_read_user;
 
--- Dashboard users table (login credentials for the web dashboard)
-CREATE TABLE IF NOT EXISTS dashboard_users (
-    id              SERIAL       PRIMARY KEY,
-    username        VARCHAR(64)  UNIQUE NOT NULL,
-    password_sha256 CHAR(64)     NOT NULL
-);
-
--- Default seed users. Passwords are 'changeme'; update via set_passwords.sh
--- or SQL before going live:
---   UPDATE dashboard_users SET password_sha256 = encode(sha256('newpw'::bytea), 'hex')
---   WHERE username = 'admin';
--- 'admin' is the dashboard operator. 'lstm' is the LSTM control loop service
--- account; the loop logs in via /auth/login to obtain a JWT.
-INSERT INTO dashboard_users (username, password_sha256)
-VALUES
-    ('admin', encode(sha256('changeme'::bytea), 'hex')),
-    ('lstm',  encode(sha256('changeme'::bytea), 'hex'))
-ON CONFLICT DO NOTHING;
-
-GRANT SELECT ON TABLE dashboard_users TO iot_read_user;
-
 -- Actuator commands written by the dashboard or by automated controllers,
 -- consumed by controller.py. issued_by distinguishes the source.
 CREATE TABLE IF NOT EXISTS actuator_commands (

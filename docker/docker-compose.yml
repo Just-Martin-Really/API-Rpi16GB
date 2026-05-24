@@ -6,6 +6,7 @@ networks:
 
 volumes:
   postgres_data:
+  keycloak_db_data:
 
 secrets:
   db_password:
@@ -14,8 +15,6 @@ secrets:
     file: ./secrets/db_write_password.txt
   db_read_password:
     file: ./secrets/db_read_password.txt
-  jwt_secret:
-    file: ./secrets/jwt_secret.txt
   mqtt_controller_user:
     file: ./secrets/mqtt_controller_user.txt
   mqtt_controller_password:
@@ -24,8 +23,12 @@ secrets:
     file: ./secrets/ca_cert.txt
   api_key:
     file: ./secrets/api_key.txt
-  dashboard_lstm_password:
-    file: ./secrets/dashboard_lstm_password.txt
+  keycloak_db_password:
+    file: ./secrets/keycloak_db_password.txt
+  keycloak_admin_password:
+    file: ./secrets/keycloak_admin_password.txt
+  keycloak_lstm_secret:
+    file: ./secrets/keycloak_lstm_secret.txt
 
 services:
 
@@ -59,7 +62,6 @@ services:
     secrets:
       - db_write_password
       - db_read_password
-      - jwt_secret
     networks:
       - app-net
     depends_on:
@@ -216,10 +218,11 @@ services:
       dockerfile: docker/lstm/Dockerfile
     restart: unless-stopped
     environment:
-      API_BASE_URL: https://backend.lab.local:8443
+      API_BASE_URL: https://www.lab.local
       API_CA_CERT: /run/secrets/ca_cert
-      LSTM_USER: lstm
-      LSTM_PASS_FILE: /run/secrets/dashboard_lstm_password
+      KEYCLOAK_TOKEN_URL: http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token
+      LSTM_CLIENT_ID: lstm-client
+      LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
       DATA_SOURCE: api
       API_DAYS: "7"
       TARGET_LOW: "19.0"
@@ -230,9 +233,69 @@ services:
       ACTUATOR_COOLER_ID: cooler01
     secrets:
       - ca_cert
-      - dashboard_lstm_password
+      - keycloak_lstm_secret
     networks:
       - app-net
     depends_on:
       nginx:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────
+  keycloak-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    secrets:
+      - keycloak_db_password
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Keycloak Identity & Access Management ────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    container_name: keycloak_server
+    command: start-dev --import-realm
+    restart: unless-stopped
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+      KC_HOSTNAME: https://www.lab.local
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    secrets:
+      - keycloak_db_password
+      - keycloak_admin_password
+    volumes:
+      - ./keycloak/iot-realm.json:/opt/keycloak/data/import/iot-realm.json:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/auth/realms/master || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    networks:
+      - app-net
