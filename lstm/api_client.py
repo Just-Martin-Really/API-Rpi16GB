@@ -58,6 +58,7 @@ class ApiClient:
                 "client_id": self.client_id,
                 "client_secret": self._client_secret(),
             },
+            verify=self.ca_cert,
             timeout=10,
         )
         r.raise_for_status()

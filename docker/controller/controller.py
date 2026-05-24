@@ -300,23 +300,22 @@ def on_message(client, userdata, msg):
             pending.pop(sensor_id, None)
             return
 
-        timestamp = now.isoformat()
-
         try:
-            # Beide Werte vorhanden und frisch → POST ans Backend.
-            # Endpunkt ist /api/v1/sensor-data — der Zig-Router prüft hier,
-            # ob der Token controller-client als Audience/azp enthält
-            # und die Realm-Rolle controller-ingest gesetzt ist.
-            result = api_post(
+            # Beide Werte vorhanden und frisch → zwei POSTs ans Backend.
+            # Das Schema in sensor_data ist eine Zeile pro Messwert mit
+            # (sensor_id, value, unit); der Zig-Handler akzeptiert genau
+            # diese Form. Temperatur und Luftfeuchtigkeit gehen daher als
+            # zwei separate Rows raus. recorded_at wird vom Server (NOW())
+            # gesetzt, daher kein timestamp-Feld im Body.
+            api_post(
                 "/api/v1/sensor-data",
-                {
-                    "sensor_id":   sensor_id,
-                    "temperature": temp_val,
-                    "humidity":    hum_val,
-                    "timestamp":   timestamp,
-                },
+                {"sensor_id": sensor_id, "value": temp_val, "unit": "C"},
             )
-            print(f"Gespeichert: {sensor_id}: temp={temp_val} hum={hum_val} → {result}", flush=True)
+            api_post(
+                "/api/v1/sensor-data",
+                {"sensor_id": sensor_id, "value": hum_val, "unit": "%"},
+            )
+            print(f"Gespeichert: {sensor_id}: temp={temp_val} hum={hum_val}", flush=True)
         except urllib.error.HTTPError as e:
             print(f"HTTP-Fehler: {e.code}: {e.read().decode()}", flush=True)
         except Exception as e:
