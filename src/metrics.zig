@@ -35,12 +35,16 @@ pub const Route = enum {
     sensor_post,
     actuator_post,
     sensor_request_post,
+    actuator_commands_get,
+    actuator_commands_sent_post,
+    sensor_requests_get,
+    sensor_requests_sent_post,
     unknown,
 
     pub fn method(self: Route) []const u8 {
         return switch (self) {
-            .health, .metrics, .sensor_get => "GET",
-            .sensor_post, .actuator_post, .sensor_request_post => "POST",
+            .health, .metrics, .sensor_get, .actuator_commands_get, .sensor_requests_get => "GET",
+            .sensor_post, .actuator_post, .sensor_request_post, .actuator_commands_sent_post, .sensor_requests_sent_post => "POST",
             .unknown => "UNKNOWN",
         };
     }
@@ -53,6 +57,10 @@ pub const Route = enum {
             .sensor_post => "/api/v1/sensor-data",
             .actuator_post => "/api/v1/actuator-command",
             .sensor_request_post => "/api/v1/sensor-request",
+            .actuator_commands_get => "/api/v1/actuator-commands",
+            .actuator_commands_sent_post => "/api/v1/actuator-commands/sent",
+            .sensor_requests_get => "/api/v1/sensor-requests",
+            .sensor_requests_sent_post => "/api/v1/sensor-requests/sent",
             .unknown => "unknown",
         };
     }

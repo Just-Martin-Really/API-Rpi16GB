@@ -120,7 +120,7 @@ def _fetch_token() -> None:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     _token = data["access_token"]
     expires_in = int(data.get("expires_in", 300))   # Keycloak-Standard: 300s

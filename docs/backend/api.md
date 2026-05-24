@@ -7,7 +7,7 @@ All endpoints return `application/json`. All `/api/v1/` endpoints require a vali
 The backend itself does not issue tokens. Clients obtain access tokens directly from Keycloak via the OAuth2 / OIDC flows configured for the `iot` realm:
 
 - Browser dashboard: Authorization Code Flow against the public client `dashboard-client`.
-- Controller (Node service): Client Credentials Flow as the confidential client `controller-client`.
+- Controller (Python service): Client Credentials Flow as the confidential client `controller-client`.
 - LSTM service: Client Credentials Flow as the confidential client `lstm-client`.
 
 ---
@@ -166,6 +166,91 @@ See [Sensor Request Flow](sensor-request-flow.md) for the end-to-end path and th
 
 ---
 
+## GET /api/v1/actuator-commands
+
+Returns up to 100 unsent rows from `actuator_commands`, oldest first. Polled by the controller every 2 seconds; each returned row is published to MQTT and then acknowledged via `POST /api/v1/actuator-commands/sent`.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Response 200**
+```json
+{
+  "commands": [
+    {"id": 42, "actuator_id": "heater01", "command": "HEAT_ON"}
+  ]
+}
+```
+
+The list is empty when no rows have `sent_at IS NULL`.
+
+---
+
+## POST /api/v1/actuator-commands/sent
+
+Marks a previously fetched row as dispatched (`sent_at = NOW()`). Idempotent: re-acking an already-sent row returns `updated: 0`.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Request body**
+```json
+{"id": 42}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `id` | integer | yes | positive; primary key of the `actuator_commands` row |
+
+**Response 200**
+```json
+{"updated": 1}
+```
+
+**Response 400** when `id` is missing, non-numeric, or non-positive:
+```json
+{"error": "id must be a positive integer"}
+```
+
+---
+
+## GET /api/v1/sensor-requests
+
+Returns up to 100 unsent rows from `sensor_requests`, oldest first. Polled by the controller every 2 seconds; each returned row is published to MQTT and then acknowledged via `POST /api/v1/sensor-requests/sent`.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Response 200**
+```json
+{
+  "requests": [
+    {"id": 17, "sensor_id": "sensor01", "command": "READ_NOW"}
+  ]
+}
+```
+
+---
+
+## POST /api/v1/sensor-requests/sent
+
+Marks a previously fetched sensor-request row as dispatched. Idempotent.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Request body**
+```json
+{"id": 17}
+```
+
+**Response 200**
+```json
+{"updated": 1}
+```
+
+---
+
 ## Authentication errors
 
 | Status | When |
@@ -181,10 +266,14 @@ The body for both is `{"error":"forbidden"}` (or `{"error":"missing authorizatio
 
 | Method | Path | Required audience | Required role | DB pool |
 |---|---|---|---|---|
-| GET  | `/api/v1/sensor-data`      | `dashboard-client`  | `dashboard-user`   | `iot_read_user`  |
-| POST | `/api/v1/sensor-data`      | `controller-client` | `controller-ingest` | `iot_write_user` |
-| POST | `/api/v1/actuator-command` | `lstm-client`       | `lstm-control`     | `iot_write_user` |
-| POST | `/api/v1/sensor-request`   | `dashboard-client`  | `dashboard-user`   | `iot_write_user` |
+| GET  | `/api/v1/sensor-data`            | `dashboard-client`  | `dashboard-user`    | `iot_read_user`  |
+| POST | `/api/v1/sensor-data`            | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/actuator-command`       | `lstm-client`       | `lstm-control`      | `iot_write_user` |
+| GET  | `/api/v1/actuator-commands`      | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/actuator-commands/sent` | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/sensor-request`         | `dashboard-client`  | `dashboard-user`    | `iot_write_user` |
+| GET  | `/api/v1/sensor-requests`        | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/sensor-requests/sent`   | `controller-client` | `controller-ingest` | `iot_write_user` |
 
 The backend matches the audience against the token's `aud` claim if it is a string or array, falling back to `azp` (Keycloak's authorized-party claim, which always carries the client_id). The realm role is read from `realm_access.roles`.
 

@@ -71,7 +71,11 @@ pub fn dispatch(
         .sensor_get => sensor.getAll(request, allocator, read_db),
         .sensor_post => sensor.create(request, allocator, write_db),
         .actuator_post => actuator.create(request, allocator, write_db),
+        .actuator_commands_get => actuator.listOpen(request, allocator, write_db),
+        .actuator_commands_sent_post => actuator.markSent(request, allocator, write_db),
         .sensor_request_post => sensor_request.create(request, allocator, write_db),
+        .sensor_requests_get => sensor_request.listOpen(request, allocator, write_db),
+        .sensor_requests_sent_post => sensor_request.markSent(request, allocator, write_db),
     };
 }
 
@@ -79,7 +83,11 @@ const RouteKind = enum {
     sensor_get,
     sensor_post,
     actuator_post,
+    actuator_commands_get,
+    actuator_commands_sent_post,
     sensor_request_post,
+    sensor_requests_get,
+    sensor_requests_sent_post,
 };
 
 const Route = struct {
@@ -102,8 +110,20 @@ fn resolveRoute(path: []const u8, method: std.http.Method) ?Route {
     if (std.mem.eql(u8, path, "/api/v1/actuator-command") and method == .POST) {
         return .{ .kind = .actuator_post, .policy = policy_lstm };
     }
+    if (std.mem.eql(u8, path, "/api/v1/actuator-commands") and method == .GET) {
+        return .{ .kind = .actuator_commands_get, .policy = policy_controller };
+    }
+    if (std.mem.eql(u8, path, "/api/v1/actuator-commands/sent") and method == .POST) {
+        return .{ .kind = .actuator_commands_sent_post, .policy = policy_controller };
+    }
     if (std.mem.eql(u8, path, "/api/v1/sensor-request") and method == .POST) {
         return .{ .kind = .sensor_request_post, .policy = policy_dashboard };
+    }
+    if (std.mem.eql(u8, path, "/api/v1/sensor-requests") and method == .GET) {
+        return .{ .kind = .sensor_requests_get, .policy = policy_controller };
+    }
+    if (std.mem.eql(u8, path, "/api/v1/sensor-requests/sent") and method == .POST) {
+        return .{ .kind = .sensor_requests_sent_post, .policy = policy_controller };
     }
     return null;
 }
@@ -126,7 +146,11 @@ pub fn routeFor(target: []const u8, method: std.http.Method) metrics.Route {
         .sensor_get => .sensor_get,
         .sensor_post => .sensor_post,
         .actuator_post => .actuator_post,
+        .actuator_commands_get => .actuator_commands_get,
+        .actuator_commands_sent_post => .actuator_commands_sent_post,
         .sensor_request_post => .sensor_request_post,
+        .sensor_requests_get => .sensor_requests_get,
+        .sensor_requests_sent_post => .sensor_requests_sent_post,
     };
 }
 
