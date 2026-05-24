@@ -104,7 +104,11 @@ Es wurde kein zusätzliches Keycloak-Zertifikat eingeführt.
 
 ## Hostname-Wechsel
 
-Öffentlicher Hostname geändert von:
+### Hinweis zur Zertifikats-Erneuerung
+
+Vor dem nächsten `docker compose up` muss `setup_tls.sh` erneut ausgeführt werden, damit das nginx-Zertifikat den neuen Hostnamen `www.lab.local` als CN/SAN enthält.
+
+Falls noch das alte Zertifikat unter `/etc/ssl/backend/backend.crt` verwendet wird, ist es weiterhin auf `backend.lab.local` ausgestellt und passt nicht zum neuen Hostnamen.
 
 ```text
 backend.lab.local
@@ -133,7 +137,8 @@ Angepasste Bereiche:
 Durchgeführt:
 
 ```bash
-grep -R "backend.lab.local" .
+grep -R "backend.lab.local" . \
+  --exclude=reverse-proxy-hostname-update.md
 ```
 
 Ergebnis:

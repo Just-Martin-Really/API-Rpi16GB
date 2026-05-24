@@ -7,6 +7,7 @@ limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
 
 server {
     listen ${PORT} default_server;
+    listen 443 ssl;
     server_name ${SERVER_NAME};
     return 301 https://$host$request_uri;
 }
