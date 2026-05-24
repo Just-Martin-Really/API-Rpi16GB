@@ -76,7 +76,7 @@ services:
       - "443:8443"
     environment:
       # Network & TLS
-      SERVER_NAME: backend.lab.local
+      SERVER_NAME: www.lab.local
       PORT: "8080"
       SSL_PORT: "8443"
       BACKEND: "http://backend:8080"
@@ -111,7 +111,6 @@ services:
     networks:
       app-net:
         aliases:
-          - backend.lab.local
           - www.lab.local
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
@@ -181,7 +180,7 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
-      API_BASE_URL: https://nginx:8443
+      API_BASE_URL: https://www.lab.local
     secrets:
       - mqtt_controller_user
       - mqtt_controller_password
@@ -224,7 +223,7 @@ services:
     environment:
       API_BASE_URL: https://www.lab.local
       API_CA_CERT: /run/secrets/ca_cert
-      KEYCLOAK_TOKEN_URL: http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token
+      KEYCLOAK_TOKEN_URL: https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
       LSTM_CLIENT_ID: lstm-client
       LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
       DATA_SOURCE: api

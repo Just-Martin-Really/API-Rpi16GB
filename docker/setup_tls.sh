@@ -7,7 +7,7 @@
 
 set -e
 
-DOMAIN="backend.lab.local"
+DOMAIN="www.lab.local"
 CA_DIR="/etc/ssl/backend/ca"
 NGINX_DIR="/etc/ssl/backend"
 MQTT_DIR="$(dirname "$0")/mosquitto/ssl"
