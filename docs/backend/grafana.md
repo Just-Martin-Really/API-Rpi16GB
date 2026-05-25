@@ -95,13 +95,12 @@ endpoint: those are server-to-server calls that don't need to traverse
 nginx or be terminated by TLS, and keeping them internal avoids mounting
 the CA cert into Grafana just for this hop.
 
-The redirect URIs in the `grafana-client` Keycloak client list three
-patterns so the same realm import works in three contexts:
+The redirect URIs in the `grafana-client` Keycloak client list two
+patterns so the same realm import works in two contexts:
 
 | Pattern                          | When it matches                                              |
 |----------------------------------|--------------------------------------------------------------|
 | `https://www.lab.local/*`        | production access through nginx                              |
-| `https://backend.lab.local/*`    | legacy hostname (kept for tools still pointing at it)        |
 | `http://localhost:3000/*`        | left in place for emergency direct access if nginx is broken |
 
 Direct access on port 3000 only works if someone temporarily re-adds the

@@ -94,13 +94,11 @@
       "serviceAccountsEnabled": false,
       "redirectUris": [
         "http://localhost:3000/*",
-        "https://www.lab.local/*",
-        "https://backend.lab.local/*"
+        "https://www.lab.local/*"
       ],
       "webOrigins": [
         "http://localhost:3000",
-        "https://www.lab.local",
-        "https://backend.lab.local"
+        "https://www.lab.local"
       ],
       "protocol": "openid-connect"
     }
