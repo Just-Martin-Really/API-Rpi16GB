@@ -10,7 +10,9 @@ server {
     server_name ${SERVER_NAME};
 
     # Loopback healthcheck, kept on HTTP so the docker probe doesn't
-    # need to deal with the self-signed cert.
+    # need to deal with the self-signed cert. The redirect below is in
+    # a location block so this exact-match location wins; a server-level
+    # return runs at the rewrite phase, before location matching.
     location = /healthz {
         allow 127.0.0.1;
         deny  all;
@@ -20,7 +22,9 @@ server {
         return 200 "ok\n";
     }
 
-    return 301 https://$host$request_uri;
+    location / {
+        return 301 https://$host$request_uri;
+    }
 }
 
 server {
