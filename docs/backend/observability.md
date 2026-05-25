@@ -237,14 +237,12 @@ host network namespace.
 
 ## What this stack does not include yet
 
-- **`controller.py` `/metrics`.** The controller is mid-refactor on Lea's
-  Keycloak branch, so its instrumentation lands in a follow-up PR after that
-  merges. Planned metrics: `controller_actuator_commands_sent_total`,
+- **`controller.py` `/metrics`.** No Prometheus client wired in yet; the
+  shipped `actuator.json` Grafana dashboard references
+  `controller_actuator_commands_sent_total`,
   `controller_sensor_messages_received_total`, `controller_queue_depth`,
-  `controller_broker_reconnects_total`.
-- **Grafana.** Containers, datasources, OIDC integration, and dashboards
-  ship in a separate PR (ClickUp task `869ddzvqp`). Once Grafana is in
-  place, Prometheus stays internal-only; Grafana is the public face.
+  `controller_broker_reconnects_total` and shows "No data" until added.
+  Title carries `STUB` until then.
 - **Alerts.** Optional per the Phase 6 spec. Will live in
   `docker/prometheus/alert.rules.yml` alongside `prometheus.yml` when added.
 

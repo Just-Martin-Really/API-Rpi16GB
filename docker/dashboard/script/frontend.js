@@ -77,8 +77,9 @@ async function initApp() {
     return;
   }
 
-  // Client-side role check. The real authorization happens in server.js —
-  // this is only so unauthorized users don't see a half-broken UI.
+  // Client-side role check. The real authorization happens in the Zig
+  // backend on every /api/v1/* request; this is only so unauthorized
+  // users don't see a half-broken UI.
   if (!hasRequiredRole("dashboard-user")) {
     showFatalError(
       "Ihr Benutzerkonto besitzt nicht die erforderliche Rolle " +

@@ -159,4 +159,4 @@ postgres.actuator_commands
 
 Actuator commands are queued through the backend API and stored centrally in PostgreSQL.
 
-> Note: Sensor ingestion has been fully refactored to use the API path (`controller → nginx → backend → postgres`). Actuator delivery can later be implemented through a dedicated dispatcher service or a future controller extension.
+> Note: Sensor ingestion and actuator delivery both use the API path (`controller ↔ nginx ↔ backend ↔ postgres`). LSTM and dashboard insert command rows via `/api/v1/actuator-command` and `/api/v1/sensor-request`; the controller drains them via `/api/v1/actuator-commands` and `/api/v1/sensor-requests` on a 2 s tick.

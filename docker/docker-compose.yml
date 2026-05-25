@@ -330,9 +330,8 @@ services:
   # ── Grafana (dashboards + OIDC) ──────────────────────────────────────────────
   # Provisioned datasources + dashboards in ./grafana/provisioning/. Admin and
   # OIDC client secrets come from file-based secrets so nothing sensitive
-  # lives in env vars or the compose file. The 3000:3000 host port mapping
-  # is TEMPORARY until Amica's nginx route (location /grafana/) lands; remove
-  # it in the same PR that adds the nginx block.
+  # lives in env vars or the compose file. Reached only through nginx at
+  # https://www.lab.local/grafana/; no host port published.
   grafana:
     image: grafana/grafana:11.3.0
     restart: unless-stopped
