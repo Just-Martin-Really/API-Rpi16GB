@@ -29,8 +29,12 @@ in [observability.md](observability.md); this page covers Grafana itself.
   | Realm role        | Grafana role  |
   |-------------------|---------------|
   | `admin-user`      | `GrafanaAdmin`|
-  | `dashboard-user`  | `Editor`      |
   | anything else     | `Viewer`      |
+
+  Dashboards are provisioned from JSON under `./grafana/provisioning/`, so
+  `dashboard-user` end users land as `Viewer`. Only the small admin pool
+  (`admin-user`) can edit live, and even those edits should be exported
+  back into provisioning JSON to survive a container restart.
 
   Anonymous access and self-signup are disabled.
 

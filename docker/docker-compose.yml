@@ -361,8 +361,10 @@ services:
       GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token"
       GF_AUTH_GENERIC_OAUTH_API_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/userinfo"
       # Map Keycloak realm roles to Grafana roles. admin-user → full admin,
-      # dashboard-user → Editor, everyone else → Viewer.
-      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(realm_access.roles[*], 'admin-user') && 'GrafanaAdmin' || contains(realm_access.roles[*], 'dashboard-user') && 'Editor' || 'Viewer'"
+      # dashboard-user → Viewer (read-only). Dashboards are provisioned from
+      # JSON under ./grafana/provisioning/, so end users should not need to
+      # edit live; Editor edits would also be lost on container restart.
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(realm_access.roles[*], 'admin-user') && 'GrafanaAdmin' || 'Viewer'"
       GF_AUTH_GENERIC_OAUTH_ALLOW_ASSIGN_GRAFANA_ADMIN: "true"
     secrets:
       - grafana_admin_password
@@ -423,8 +425,9 @@ services:
       - keycloak_admin_password
     volumes:
       - ./keycloak/iot-realm.json:/opt/keycloak/data/import/iot-realm.json:ro
-    ports:
-      - "8080:8080"
+    # No host port: Keycloak is reached through nginx at /auth/. Publishing
+    # 8080 to the host bypasses ModSecurity, the subnet allowlist and the
+    # rate limit. Re-add as 127.0.0.1:8080:8080 if you need local debugging.
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/auth/realms/master || exit 1"]
       interval: 30s
