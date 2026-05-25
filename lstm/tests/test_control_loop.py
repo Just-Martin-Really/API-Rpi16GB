@@ -74,7 +74,7 @@ def test_iteration_below_band_turns_heater_on():
     client.post_actuator_command.assert_called_once()
     args, kwargs = client.post_actuator_command.call_args
     assert args[0] == control_loop.HEATER_ID
-    assert args[1] == "on"
+    assert args[1] == "HEAT_ON"
     assert kwargs.get("issued_by") == "machine"
 
 
@@ -86,7 +86,7 @@ def test_iteration_above_band_turns_cooler_on():
     client.post_actuator_command.assert_called_once()
     args, _ = client.post_actuator_command.call_args
     assert args[0] == control_loop.COOLER_ID
-    assert args[1] == "on"
+    assert args[1] == "FAN_ON"
 
 
 def test_iteration_dedupes_repeated_state():

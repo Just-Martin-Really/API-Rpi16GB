@@ -265,8 +265,8 @@ services:
       TARGET_HIGH: "23.0"
       LOOKAHEAD: "30"
       LOOP_SECONDS: "60"
-      ACTUATOR_HEATER_ID: heater01
-      ACTUATOR_COOLER_ID: cooler01
+      ACTUATOR_HEATER_ID: actuator01
+      ACTUATOR_COOLER_ID: actuator01
     secrets:
       - ca_cert
       - keycloak_lstm_secret

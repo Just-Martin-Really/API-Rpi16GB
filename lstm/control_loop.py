@@ -38,6 +38,17 @@ COOLER_ID = os.environ.get("ACTUATOR_COOLER_ID", "cooler01")
 
 ROLE_TO_ACTUATOR = {"heater": HEATER_ID, "cooler": COOLER_ID}
 
+# Translation from the loop's internal {role, state} representation to the
+# command names the firmware understands. The Pico subscribes to a single
+# actuator topic and switches on the command string, so off/on become
+# explicit HEAT/FAN verbs at the wire.
+ROLE_COMMAND_TO_WIRE = {
+    ("heater", "on"):  "HEAT_ON",
+    ("heater", "off"): "HEAT_OFF",
+    ("cooler", "on"):  "FAN_ON",
+    ("cooler", "off"): "FAN_OFF",
+}
+
 # Prometheus metrics. start_http_server() spins up a daemon thread that serves
 # /metrics on METRICS_PORT against the default registry, so just defining the
 # instruments here is enough — observing or incrementing them anywhere in the
@@ -87,12 +98,13 @@ def iteration(model, mean, std, client, last_sent, dry_run):
         return last_sent
     for role, command in to_send.items():
         actuator_id = ROLE_TO_ACTUATOR[role]
+        wire_command = ROLE_COMMAND_TO_WIRE[(role, command)]
         if dry_run:
-            log(f"DRY-RUN would POST: actuator_id={actuator_id} command={command} issued_by=machine")
+            log(f"DRY-RUN would POST: actuator_id={actuator_id} command={wire_command} issued_by=machine")
         else:
-            client.post_actuator_command(actuator_id, command, issued_by="machine")
-            log(f"sent: actuator_id={actuator_id} command={command} issued_by=machine")
-        commands_sent_total.labels(role=role, command=command).inc()
+            client.post_actuator_command(actuator_id, wire_command, issued_by="machine")
+            log(f"sent: actuator_id={actuator_id} command={wire_command} issued_by=machine")
+        commands_sent_total.labels(role=role, command=wire_command).inc()
     new_state = dict(last_sent)
     new_state.update(to_send)
     return new_state
