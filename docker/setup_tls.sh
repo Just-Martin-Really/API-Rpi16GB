@@ -29,14 +29,12 @@ fi
 
 mkdir -p "$CA_DIR" "$NGINX_DIR" "$MQTT_DIR"
 
-# Guard against accidental CA regeneration. The CA cert is distributed to
-# every client (Pico, dashboards, scripts) — overwriting it silently breaks
-# all of them. Only proceed past this gate if either the CA doesn't exist
-# yet, or the operator passed --force-new-ca.
-if [[ -f "$CA_DIR/ca.crt" && $FORCE_NEW_CA -eq 0 ]]; then
-    echo "Refusing to overwrite existing CA at $CA_DIR/ca.crt." >&2
-    echo "Pass --force-new-ca to regenerate. This invalidates every client cert in circulation." >&2
-    exit 1
+# CA regeneration is gated by --force-new-ca because the CA cert is
+# distributed to every client (Pico, dashboards, scripts) and overwriting
+# it silently breaks all of them. Without the flag the script reuses the
+# existing CA and only refreshes the server certs.
+if [[ -f "$CA_DIR/ca.crt" && $FORCE_NEW_CA -eq 1 ]]; then
+    echo "==> --force-new-ca specified, regenerating CA (existing client trust will break)"
 fi
 
 if [[ $FORCE_NEW_CA -eq 1 ]]; then
