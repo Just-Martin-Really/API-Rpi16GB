@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
 
 RUN pip install --no-cache-dir paho-mqtt==2.1.0 prometheus-client==0.20.0
 

@@ -44,7 +44,7 @@ services:
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     restart: unless-stopped
     environment:
       POSTGRES_DB: sensor
@@ -97,7 +97,7 @@ services:
 
   # ── nginx reverse proxy + ModSecurity WAF + OWASP CRS (Kap4 4.2) ─────────
   nginx:
-    image: owasp/modsecurity-crs:nginx-alpine
+    image: owasp/modsecurity-crs:nginx-alpine@sha256:88b59911549723e71beabf3b4aa47bbd31b00e79401f442e65ddfc430ae46343
     restart: unless-stopped
     ports:
       - "80:8080"
@@ -154,7 +154,7 @@ services:
 
   # ── MQTT broker ────────────────────────────────────────────────────────────
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2@sha256:a908c65cc8e67ec9d292ef27c2c0360dbaaee7eb1b935cdd194e67697f15dea1
     restart: unless-stopped
     ports:
       - "8883:8883"
@@ -269,7 +269,7 @@ services:
   # auth. node_exporter runs on the host network namespace so it can report
   # real CPU / RAM / disk / temperature from the Pi, not container values.
   prometheus:
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -293,7 +293,7 @@ services:
   # Pi's real values rather than container-scoped ones. Scraped by Prometheus
   # via host.docker.internal:9100 (see prometheus extra_hosts).
   node_exporter:
-    image: quay.io/prometheus/node-exporter:v1.8.2
+    image: quay.io/prometheus/node-exporter:v1.8.2@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706
     restart: unless-stopped
     network_mode: host
     pid: host
@@ -313,7 +313,7 @@ services:
   # ./postgres/init.sql. Password comes from secrets/db_exporter_password.txt
   # via the db_exporter_password secret.
   postgres_exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0@sha256:386b12d19eab2a37d7cd8ca8b4c7491cc7a830d9581f49af6c98a393da9605e6
     restart: unless-stopped
     environment:
       DATA_SOURCE_URI: "postgres:5432/sensor?sslmode=disable"
@@ -333,7 +333,7 @@ services:
   # lives in env vars or the compose file. Reached only through nginx at
   # https://www.lab.local/grafana/; no host port published.
   grafana:
-    image: grafana/grafana:11.3.0
+    image: grafana/grafana:11.3.0@sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3
     restart: unless-stopped
     environment:
       # Public URL Grafana generates absolute links and redirect URIs for.
@@ -387,7 +387,7 @@ services:
 
   # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────
   keycloak-db:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     restart: unless-stopped
     environment:
       POSTGRES_DB: keycloak
@@ -408,7 +408,7 @@ services:
 
   # ── Keycloak Identity & Access Management ────────────────────────────────────
   keycloak:
-    image: quay.io/keycloak/keycloak:26.1
+    image: quay.io/keycloak/keycloak:26.1@sha256:be6a86215213145bfb4fb3e2b3ab982a806d00262655abdcf3ffa6a38d241c7c
     container_name: keycloak_server
     command: start-dev --import-realm
     restart: unless-stopped
