@@ -16,6 +16,7 @@ docker/secrets/
 .vscode/
 .claude/
 *.swp
+*.tmp
 
 # Python
 __pycache__/
@@ -25,9 +26,6 @@ __pycache__/
 
 # OS
 .DS_Store
-
-# Node modules (can be reinstalled with npm ci)
-docker/webserver/node_modules/
 
 # Zensical build output and synced external docs
 site/
