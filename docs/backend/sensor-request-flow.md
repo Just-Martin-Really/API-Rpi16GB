@@ -9,26 +9,26 @@ caller ──► nginx ──► backend ──► postgres (sensor_requests)
                                        ▲
                                        │ poll every 2s
                                        │
-controller ──► nginx ──► webserver ────┘
+controller ──► nginx ──► backend ──────┘
    │
    └──► mosquitto ──► Pico   (publishes <sensor_id>/request, QoS 1)
                        │
                        │ Pico reads DHT22 and publishes <sensor_id>/data
                        ▼
-                  mosquitto ──► controller ──► webserver ──► postgres (sensor_data)
+                  mosquitto ──► controller ──► nginx ──► backend ──► postgres (sensor_data)
 ```
 
 The request path mirrors the actuator command flow: the caller inserts a row into `sensor_requests` and returns immediately, the controller drains pending rows on its 2s tick and publishes them over MQTT. The Pico is responsible for the response leg, which reuses the existing sensor data path.
 
 ## Public endpoint
 
-`POST /api/v1/sensor-request` is documented in the [API Reference](api.md#post-apiv1sensor-request). Authenticated with a dashboard JWT. Inserts one row into `sensor_requests` with `sent_at = NULL`.
+`POST /api/v1/sensor-request` is documented in the [API Reference](api.md#post-apiv1sensor-request). Authenticated with a dashboard JWT (audience `dashboard-client`, role `dashboard-user`). Inserts one row into `sensor_requests` with `sent_at = NULL`.
 
-## Internal endpoints
+## Controller drain endpoints
 
-Both routes live on the Node webserver (`docker/webserver/server.js`) under `/api/internal/`, behind the existing `x-api-key` header check. They are not exposed outside the docker network's allowlist.
+Both routes are served by the Zig backend (`src/handlers/sensor_request.zig`, routed in `src/router.zig`). Authentication is a Keycloak access token whose audience is `controller-client` and whose realm role is `controller-ingest`.
 
-### GET /api/internal/sensor-requests
+### GET /api/v1/sensor-requests
 
 Returns up to 100 pending requests, oldest first.
 
@@ -41,7 +41,7 @@ Returns up to 100 pending requests, oldest first.
 }
 ```
 
-### POST /api/internal/sensor-requests/sent
+### POST /api/v1/sensor-requests/sent
 
 Marks one request as sent. Idempotent: subsequent calls for the same id return `{"updated": 0}` because the SQL also checks `sent_at IS NULL`.
 
@@ -61,12 +61,14 @@ Marks one request as sent. Idempotent: subsequent calls for the same id return `
 
 `docker/controller/controller.py` runs `drain_sensor_requests` alongside `drain_actuator_commands` on the same 2 second tick:
 
-1. `GET /api/internal/sensor-requests` (HTTPS, x-api-key).
+1. `GET /api/v1/sensor-requests` (HTTPS, `Authorization: Bearer <token>`).
 2. For each row:
     1. Validate `sensor_id` against `^[A-Za-z0-9_-]+$` and `command` against `^[A-Z0-9_]+$`. Rejected rows are marked sent without publishing, so a malicious authenticated caller cannot inject MQTT topics via DB content.
     2. Publish `{"command": "<command>"}` to `<sensor_id>/request` at QoS 1 and wait up to 5 s for the broker ack.
-    3. On successful publish, `POST /api/internal/sensor-requests/sent` to mark the row.
+    3. On successful publish, `POST /api/v1/sensor-requests/sent` to mark the row.
 3. Sleep `ACTUATOR_POLL_SECONDS` (2 s) and repeat.
+
+The bearer token is shared with the actuator drain (one cached token per controller process, refreshed before expiry).
 
 The poll constant is shared with the actuator drain by design: one tick, both queues. Tuning it changes the worst-case latency for both flows in lockstep.
 
@@ -118,7 +120,7 @@ CREATE INDEX idx_sensor_requests_unsent
     WHERE sent_at IS NULL;
 ```
 
-Grants: `iot_write_user` holds `INSERT, SELECT, UPDATE`. The backend inserts (issuing path), the webserver selects and updates (drain path). No other service touches the table.
+Grants: `iot_write_user` holds `INSERT, SELECT, UPDATE`. The Zig backend uses this role for both the issuing path (`POST /api/v1/sensor-request`) and the drain path (`GET` / `POST /sent`). No other service touches the table.
 
 A migration block in `docker/postgres/migrate.sql` covers existing deployments where the initial schema has already been applied.
 
@@ -130,9 +132,10 @@ A migration block in `docker/postgres/migrate.sql` covers existing deployments w
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `sensor-request drain error: Connection refused` in controller logs | `API_BASE_URL` does not include the in-network port (`https://nginx:8443`), or nginx is down |
-| `sensor-request drain error: HTTP Error 401` | API key in `/run/secrets/api_key` does not match what the webserver reads |
+| `sensor-request drain error: Connection refused` in controller logs | `API_BASE_URL` is wrong or nginx is down |
+| `sensor-request drain error: HTTP Error 401` | Token expired or revoked mid-flight; the controller refreshes and retries once. Persistent 401 means the Keycloak client secret in `/run/secrets/keycloak_controller_secret` does not match `controller-client` in the realm |
+| `sensor-request drain error: HTTP Error 403` | Token is valid but missing the `controller-ingest` realm role on the `controller-client` service account, or audience does not match |
 | `sensor-request publish failed: id=N` | Mosquitto unreachable or the publish ack timed out; row stays unsent for the next poll |
 | `sensor-request skipped invalid row id=N` | The row's `sensor_id` or `command` failed the regex check; row was marked sent without publishing |
-| Row stays with `sent_at = NULL` and no log line | Controller is not running, or it cannot reach the webserver at all |
+| Row stays with `sent_at = NULL` and no log line | Controller is not running, or it cannot reach the backend at all |
 | Row is marked sent but no fresh `sensor_data` row appears | Pico is not subscribed (check ACL + broker logs), or the DHT22 read failed (check Pico console for `Sensor-Fehler`) |
