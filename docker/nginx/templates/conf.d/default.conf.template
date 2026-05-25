@@ -8,6 +8,18 @@ limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
 server {
     listen ${PORT} default_server;
     server_name ${SERVER_NAME};
+
+    # Loopback healthcheck, kept on HTTP so the docker probe doesn't
+    # need to deal with the self-signed cert.
+    location = /healthz {
+        allow 127.0.0.1;
+        deny  all;
+        modsecurity off;
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
     return 301 https://$host$request_uri;
 }
 
