@@ -1,13 +1,38 @@
-# Exclude files not needed inside the Docker build context
+# Backend build uses `context: ..` (whole repo), so this file matters.
+# Other services have per-subdir contexts and ignore this file; they
+# can ship their own .dockerignore if their context grows.
+
+# Version control + editor + IDE
 .git
+.gitignore
+.gitattributes
+.claude
 .idea
 .vscode
+*.swp
+*.tmp
+
+# Docs site (only consumed by the Zensical workflow, never built into images)
 docs
-docker
 *.md
+
+# Slides + course material
+kaps
+
+# `docker/` is on disk at runtime via bind mounts; never needed at image build
+docker
+
+# Zig build artifacts
 zig-cache
 .zig-cache
 zig-out
+
+# Python venvs and caches (root + nested)
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
 
 # LSTM local-dev artifacts that must not be baked into the image
 lstm/.venv
@@ -19,3 +44,10 @@ lstm/.pytest_cache
 lstm/tests/__pycache__
 lstm/data/temps.csv
 lstm/data/model.tflite
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Build / preview output
+site
