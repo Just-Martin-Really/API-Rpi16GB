@@ -14,6 +14,10 @@ const RoutePolicy = struct {
     role: []const u8,
 };
 
+/// A route may accept any of a small set of policies. The verifier is tried
+/// against each in order and the first successful one wins.
+const RoutePolicies = []const RoutePolicy;
+
 pub fn dispatch(
     io: std.Io,
     request: *std.http.Server.Request,
@@ -58,14 +62,24 @@ pub fn dispatch(
     if (auth_header == null) {
         return respondJson(request, .unauthorized, "{\"error\":\"missing authorization header\"}");
     }
-    verifier.verify(io, auth_header.?, route.policy.audience, route.policy.role) catch |err| {
-        std.log.warn("auth rejected on {s}: {s}", .{ path, @errorName(err) });
-        const status: std.http.Status = switch (err) {
+    var verified = false;
+    var last_err: anyerror = error.WrongAudience;
+    for (route.policies) |p| {
+        verifier.verify(io, auth_header.?, p.audience, p.role) catch |err| {
+            last_err = err;
+            continue;
+        };
+        verified = true;
+        break;
+    }
+    if (!verified) {
+        std.log.warn("auth rejected on {s}: {s}", .{ path, @errorName(last_err) });
+        const status: std.http.Status = switch (last_err) {
             error.MissingBearer => .unauthorized,
             else => .forbidden,
         };
         return respondJson(request, status, "{\"error\":\"forbidden\"}");
-    };
+    }
 
     return switch (route.kind) {
         .sensor_get => sensor.getAll(request, allocator, read_db),
@@ -92,38 +106,45 @@ const RouteKind = enum {
 
 const Route = struct {
     kind: RouteKind,
-    policy: RoutePolicy,
+    policies: RoutePolicies,
 };
 
-const policy_dashboard: RoutePolicy = .{ .audience = "dashboard-client", .role = "dashboard-user" };
-const policy_controller: RoutePolicy = .{ .audience = "controller-client", .role = "controller-ingest" };
-const policy_lstm: RoutePolicy = .{ .audience = "lstm-client", .role = "lstm-control" };
+const policy_dashboard: RoutePolicies = &.{.{ .audience = "dashboard-client", .role = "dashboard-user" }};
+const policy_controller: RoutePolicies = &.{.{ .audience = "controller-client", .role = "controller-ingest" }};
+const policy_lstm: RoutePolicies = &.{.{ .audience = "lstm-client", .role = "lstm-control" }};
+
+// Reads of sensor-data are needed by both the browser dashboard and the LSTM
+// control loop, so this endpoint accepts either client's token.
+const policy_sensor_read: RoutePolicies = &.{
+    .{ .audience = "dashboard-client", .role = "dashboard-user" },
+    .{ .audience = "lstm-client", .role = "lstm-control" },
+};
 
 fn resolveRoute(path: []const u8, method: std.http.Method) ?Route {
     if (std.mem.eql(u8, path, "/api/v1/sensor-data")) {
         return switch (method) {
-            .GET => .{ .kind = .sensor_get, .policy = policy_dashboard },
-            .POST => .{ .kind = .sensor_post, .policy = policy_controller },
+            .GET => .{ .kind = .sensor_get, .policies = policy_sensor_read },
+            .POST => .{ .kind = .sensor_post, .policies = policy_controller },
             else => null,
         };
     }
     if (std.mem.eql(u8, path, "/api/v1/actuator-command") and method == .POST) {
-        return .{ .kind = .actuator_post, .policy = policy_lstm };
+        return .{ .kind = .actuator_post, .policies = policy_lstm };
     }
     if (std.mem.eql(u8, path, "/api/v1/actuator-commands") and method == .GET) {
-        return .{ .kind = .actuator_commands_get, .policy = policy_controller };
+        return .{ .kind = .actuator_commands_get, .policies = policy_controller };
     }
     if (std.mem.eql(u8, path, "/api/v1/actuator-commands/sent") and method == .POST) {
-        return .{ .kind = .actuator_commands_sent_post, .policy = policy_controller };
+        return .{ .kind = .actuator_commands_sent_post, .policies = policy_controller };
     }
     if (std.mem.eql(u8, path, "/api/v1/sensor-request") and method == .POST) {
-        return .{ .kind = .sensor_request_post, .policy = policy_dashboard };
+        return .{ .kind = .sensor_request_post, .policies = policy_dashboard };
     }
     if (std.mem.eql(u8, path, "/api/v1/sensor-requests") and method == .GET) {
-        return .{ .kind = .sensor_requests_get, .policy = policy_controller };
+        return .{ .kind = .sensor_requests_get, .policies = policy_controller };
     }
     if (std.mem.eql(u8, path, "/api/v1/sensor-requests/sent") and method == .POST) {
-        return .{ .kind = .sensor_requests_sent_post, .policy = policy_controller };
+        return .{ .kind = .sensor_requests_sent_post, .policies = policy_controller };
     }
     return null;
 }
