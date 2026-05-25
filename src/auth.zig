@@ -8,6 +8,12 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 const b64url_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".*;
 const b64dec = std.base64.Base64Decoder.init(b64url_alphabet, null);
 
+/// Tolerance applied to the `exp` claim. A token whose declared expiry is
+/// up to this many seconds in the past is still accepted. Covers small
+/// drift between the Keycloak host clock and the backend host clock
+/// (notably right after a Pi reboot before NTP has caught up).
+pub const clock_skew_seconds: i64 = 30;
+
 pub const VerifyError = error{
     MissingBearer,
     MalformedToken,
@@ -209,8 +215,12 @@ pub const Verifier = struct {
             return error.MalformedToken;
         const claims = parseClaims(payload_json) catch return error.MalformedToken;
 
+        // Allow a small clock-skew window on exp. Pi RTCs drift and NTP can
+        // be slow to converge after a power cut; 30 s matches the controller
+        // token-refresh margin so a token accepted at issue-time stays usable
+        // up to its real expiry across both clocks.
         const now = @as(i64, c.time(null));
-        if (claims.exp <= now) return error.Expired;
+        if (claims.exp + clock_skew_seconds <= now) return error.Expired;
         if (!std.mem.eql(u8, claims.iss, self.issuer)) return error.WrongIssuer;
 
         if (!claims.matchesAudience(expected_audience)) return error.WrongAudience;
