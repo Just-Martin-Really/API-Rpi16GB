@@ -4,6 +4,13 @@
 #
 # The password is read from a file via secureJsonData. Grafana resolves
 # $__file{...} syntax against the secrets mounted into the container.
+#
+# sslmode: disable is deliberate. Both Grafana and the Postgres instance
+# run on the internal `app-net` bridge; the connection never leaves
+# docker-side userspace. Adding a self-signed Postgres cert just for this
+# hop would require provisioning + mounting it into both containers for
+# no real adversary model. If Grafana ever moves off `app-net`, flip this
+# to sslmode: require and ship the lab CA into the Grafana container.
 
 apiVersion: 1
 
