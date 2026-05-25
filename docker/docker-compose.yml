@@ -57,6 +57,12 @@ services:
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sensor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     # Not exposed to the host — only reachable inside app-net
 
   # ── Zig backend ────────────────────────────────────────────────────────────
@@ -74,8 +80,15 @@ services:
       - db_read_password
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── nginx reverse proxy + ModSecurity WAF + OWASP CRS (Kap4 4.2) ─────────
   nginx:
@@ -123,14 +136,16 @@ services:
         aliases:
           - www.lab.local
     healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 15s
     depends_on:
-      - backend
-      - keycloak
+      backend:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
 
   # ── MQTT broker ────────────────────────────────────────────────────────────
   mosquitto:
@@ -161,7 +176,8 @@ services:
     networks:
       - app-net
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── Seeder (fake-data generator, on-demand only) ──────────────────────────
   # Not started by `docker compose up` — opt-in via the "tools" profile:
@@ -179,7 +195,8 @@ services:
     networks:
       - app-net
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── Controller (MQTT → DB bridge) ─────────────────────────────────────────
   controller:
@@ -302,7 +319,8 @@ services:
     networks:
       - app-net
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── Grafana (dashboards + OIDC) ──────────────────────────────────────────────
   # Provisioned datasources + dashboards in ./grafana/provisioning/. Admin and
@@ -356,8 +374,10 @@ services:
     networks:
       - app-net
     depends_on:
-      - prometheus
-      - postgres
+      prometheus:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────
   keycloak-db:
