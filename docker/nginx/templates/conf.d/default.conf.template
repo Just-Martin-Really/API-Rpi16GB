@@ -2,8 +2,11 @@
 # Replaces the OWASP CRS image's default template. Variables in ${...}
 # are filled by envsubst at container start from the nginx service env.
 
-# Rate limit: 30 req/min per client IP (http-scope zone)
-limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
+# Rate limit: 300 req/min per client IP (http-scope zone). Higher than a
+# typical browser session needs, but the controller and lstm services
+# poll two GET endpoints every 2s plus emit sensor-data POSTs; combined
+# legitimate load exceeds 60r/m before any user traffic.
+limit_req_zone $binary_remote_addr zone=api:10m rate=300r/m;
 
 server {
     listen ${PORT} default_server;
