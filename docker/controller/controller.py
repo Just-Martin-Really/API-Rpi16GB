@@ -17,6 +17,7 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
+import threading
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 from prometheus_client import Counter, Gauge, start_http_server
@@ -118,13 +119,21 @@ FRESHNESS_SECONDS = 55
 
 
 # Token-Cache
-# Das Access-Token wird im Speicher gehalten (kein Redis, kein File –
-# der Prozess ist kurzlebig und single-threaded).
+# Das Access-Token wird im Speicher gehalten (kein Redis, kein File).
+# Der Cache wird von zwei Threads gelesen und geschrieben:
+#   - dem Haupt-Loop, der drain_actuator_commands / drain_sensor_requests
+#     aufruft (und damit api_get / api_post),
+#   - dem paho MQTT-Network-Thread, der in on_message direkt api_post
+#     für /api/v1/sensor-data aufruft.
+# Ohne Lock können beide gleichzeitig _fetch_token ausführen und sich
+# gegenseitig das frisch geholte Token überschreiben.
 # _token:             das aktuelle JWT-Access-Token als String
 # _token_expires_at:  Unix-Timestamp, ab dem das Token abgelaufen ist
+# _token_lock:        schützt _token und _token_expires_at
 
 _token: str | None = None
 _token_expires_at: float = 0.0
+_token_lock = threading.Lock()
 
 
 def _client_secret() -> str:
@@ -134,14 +143,12 @@ def _client_secret() -> str:
     return open(CONTROLLER_CLIENT_SECRET_FILE).read().strip()
 
 
-def _fetch_token() -> None:
-    """Holt ein neues Access-Token von Keycloak via Client-Credentials-Flow.
+def _fetch_token_locked() -> None:
+    """Holt ein neues Access-Token. Caller muss _token_lock halten.
 
     Client-Credentials = Maschinenkonto-Flow: kein Benutzer-Login, nur
     client_id + client_secret. Das Backend prüft dann, ob der Token die
-    Realm-Rolle 'controller-ingest' enthält.
-
-    Das Token und seine Ablaufzeit werden im Modul-State gespeichert."""
+    Realm-Rolle 'controller-ingest' enthält."""
     global _token, _token_expires_at
     body = urllib.parse.urlencode({
         "grant_type":    "client_credentials",
@@ -167,10 +174,15 @@ def _auth_headers() -> dict:
 
     Holt automatisch ein neues Token, wenn:
         - noch kein Token vorhanden ist (erster Aufruf nach Start), oder
-        - das Token weniger als TOKEN_REFRESH_MARGIN_SECONDS gültig ist."""
-    global _token, _token_expires_at
+        - das Token weniger als TOKEN_REFRESH_MARGIN_SECONDS gültig ist.
+
+    Doppelter Check innerhalb des Locks (double-checked locking): zwei
+    Threads, die gleichzeitig die Abgelaufen-Bedingung sehen, würden
+    sonst beide ein Token holen."""
     if _token is None or time.time() >= _token_expires_at - TOKEN_REFRESH_MARGIN_SECONDS:
-        _fetch_token()
+        with _token_lock:
+            if _token is None or time.time() >= _token_expires_at - TOKEN_REFRESH_MARGIN_SECONDS:
+                _fetch_token_locked()
     return {"Authorization": f"Bearer {_token}"}
 
 
@@ -181,8 +193,9 @@ def _force_refresh() -> None:
     Wird bei einem 401-Fehler aufgerufen: das Backend hat den Token abgelehnt
     (z.B. weil Keycloak ihn zwischenzeitlich revoziert hat)."""
     global _token, _token_expires_at
-    _token = None
-    _token_expires_at = 0.0
+    with _token_lock:
+        _token = None
+        _token_expires_at = 0.0
 
 
 # TLS-Kontext für HTTPS-Requests ans Backend
