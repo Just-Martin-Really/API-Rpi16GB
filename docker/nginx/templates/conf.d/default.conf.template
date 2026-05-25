@@ -50,8 +50,10 @@ server {
         return 200 "ok\n";
     }
 
-    # Subnet allowlist: Production WLAN + internal Docker bridge networks.
+    # Subnet allowlist: Production WLAN, direct-ethernet dev link to the
+    # 16GB Pi, and internal Docker bridge networks.
     allow 192.168.50.0/24;
+    allow 192.168.2.0/24;
     allow 172.16.0.0/12;
     deny  all;
 
