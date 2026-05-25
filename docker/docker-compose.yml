@@ -449,7 +449,7 @@ services:
     # 8080 to the host bypasses ModSecurity, the subnet allowlist and the
     # rate limit. Re-add as 127.0.0.1:8080:8080 if you need local debugging.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/auth/realms/master || exit 1"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
       interval: 30s
       timeout: 10s
       retries: 10
