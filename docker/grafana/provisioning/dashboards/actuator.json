@@ -1,8 +1,8 @@
 {
   "uid": "actuator",
-  "title": "Actuator (controller.py) — STUB",
-  "description": "Panels reference metrics not yet exported by controller.py. They will populate once the follow-up PR (after Lea's Keycloak refactor merges) adds prometheus_client to the controller. Until then every panel shows 'No data'.",
-  "tags": ["actuator", "controller", "stub"],
+  "title": "Actuator (controller.py)",
+  "description": "Counters exposed by controller.py via prometheus_client on :8000/metrics. Queue depth tracks the sensor pair buffer (typically 0 or 1, spikes mean the broker delivered half a pair without the other half within the freshness window).",
+  "tags": ["actuator", "controller"],
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "30s",
@@ -10,32 +10,22 @@
   "templating": { "list": [] },
   "panels": [
     {
-      "id": 0,
-      "type": "text",
-      "title": "Status",
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
-      "options": {
-        "mode": "markdown",
-        "content": "**Stub dashboard.** controller.py has no `/metrics` endpoint yet. Wait for the follow-up PR that adds `controller_*` metrics. Tracked in ClickUp `869ddzvnj` (Prometheus task, unchecked items under controller.py-Teil)."
-      }
-    },
-    {
       "id": 1,
       "type": "stat",
       "title": "Queue depth",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 4 },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
       "targets": [
         { "expr": "controller_queue_depth", "refId": "A" }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "noValue": "no data (stub)" } }
+      "fieldConfig": { "defaults": { "unit": "short" } }
     },
     {
       "id": 2,
       "type": "timeseries",
       "title": "Actuator commands sent (per minute)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 4 },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 0 },
       "targets": [
         {
           "expr": "sum by (actuator_id) (rate(controller_actuator_commands_sent_total[5m])) * 60",
@@ -50,7 +40,7 @@
       "type": "timeseries",
       "title": "Sensor messages received",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
           "expr": "sum by (sensor_id) (rate(controller_sensor_messages_received_total[5m]))",
@@ -65,7 +55,7 @@
       "type": "timeseries",
       "title": "Broker reconnects",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
           "expr": "increase(controller_broker_reconnects_total[15m])",

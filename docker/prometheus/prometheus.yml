@@ -36,6 +36,14 @@ scrape_configs:
     static_configs:
       - targets: ["lstm:8000"]
 
+  # Controller. prometheus_client.start_http_server(METRICS_PORT) inside
+  # controller.py exposes counters for actuator-command dispatches,
+  # inbound sensor messages, broker reconnects, and pair-buffer depth.
+  - job_name: controller
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["controller:8000"]
+
   # Sensor database. postgres_exporter_user is created in init.sql with the
   # pg_monitor role; see docs/backend/observability.md for the password
   # bootstrap.

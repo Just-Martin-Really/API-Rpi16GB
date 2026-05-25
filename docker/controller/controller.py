@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
+from prometheus_client import Counter, Gauge, start_http_server
 
 # Validierungs-Regexe
 # Eingaben aus MQTT-Nachrichten werden vor Weiterverarbeitung geprüft,
@@ -68,6 +69,39 @@ TOKEN_REFRESH_MARGIN_SECONDS = 30
 # Wie oft (in Sekunden) Aktor-Befehle und Sensor-Anfragen abgeholt werden.
 
 ACTUATOR_POLL_SECONDS = 2
+
+# Metrics-Port (Prometheus scraped). Internal only, app-net.
+METRICS_PORT = int(os.environ.get("METRICS_PORT", 8000))
+
+# Prometheus instruments
+#   controller_actuator_commands_sent_total: incremented after a successful
+#       MQTT publish + ack for an actuator command.
+#   controller_sensor_messages_received_total: incremented on every inbound
+#       MQTT sensor message (one per temperature or humidity reading).
+#   controller_broker_reconnects_total: incremented on every successful
+#       (re)connect after the first one, i.e. broker dropped and came back.
+#   controller_queue_depth: gauge of the number of sensor_id entries in the
+#       pair buffer that have at least one half (temp or humidity) waiting
+#       for its partner. Spikes above ~1 indicate the broker is bursty.
+
+actuator_sent = Counter(
+    "controller_actuator_commands_sent_total",
+    "Actuator commands dispatched to MQTT after a successful ack.",
+    ["actuator_id"],
+)
+sensor_received = Counter(
+    "controller_sensor_messages_received_total",
+    "Sensor data messages received from MQTT.",
+    ["sensor_id"],
+)
+broker_reconnects = Counter(
+    "controller_broker_reconnects_total",
+    "Broker reconnects after the initial connect.",
+)
+queue_depth = Gauge(
+    "controller_queue_depth",
+    "Sensor pair buffer depth (sensor_ids waiting on their partner reading).",
+)
 
 # Sensor-Datenpuffer
 # Temperatur und Luftfeuchtigkeit kommen als separate MQTT-Nachrichten an.
@@ -229,11 +263,19 @@ def api_get(path):
 
 # MQTT-Callbacks
 
+_connected_once = False
+
+
 def on_connect(client, userdata, flags, rc, properties=None):
     """Wird aufgerufen, sobald die MQTT-Verbindung steht (oder fehlschlägt).
-    rc == 0 bedeutet Erfolg. Bei Erfolg abonnieren wir das Sensor-Datentopic."""
+    rc == 0 bedeutet Erfolg. Bei Erfolg abonnieren wir das Sensor-Datentopic.
+    Jeder erneute erfolgreiche Connect nach dem ersten zählt als reconnect."""
+    global _connected_once
     if rc == 0:
         print("Connected to broker", flush=True)
+        if _connected_once:
+            broker_reconnects.inc()
+        _connected_once = True
         client.subscribe("sensor01/data")
     else:
         print(f"Broker connection failed: rc={rc}", flush=True)
@@ -254,6 +296,8 @@ def on_message(client, userdata, msg):
         value     = float(payload["value"])
         unit      = str(payload.get("unit", ""))
         sensor_id = msg.topic.split("/")[0]  # "sensor01" aus "sensor01/data"
+
+        sensor_received.labels(sensor_id=sensor_id).inc()
 
         # Wertebereich prüfen, bevor wir puffern.
         if unit == "C":
@@ -327,6 +371,9 @@ def on_message(client, userdata, msg):
 
     except Exception as e:
         print(f"Fehler beim Verarbeiten der Nachricht: {e}", flush=True)
+    finally:
+        # Gauge nach jedem on_message neu setzen — billig genug für 2 msg/min.
+        queue_depth.set(len(pending))
 
 
 # Drain-Funktionen
@@ -370,6 +417,7 @@ def drain_actuator_commands(client):
 
         # Erst nach erfolgreichem MQTT-Publish als gesendet markieren.
         api_post("/api/v1/actuator-commands/sent", {"id": row_id})
+        actuator_sent.labels(actuator_id=actuator_id).inc()
         print(f"actuator sent: {actuator_id} <- {command} (id={row_id})", flush=True)
 
 
@@ -416,6 +464,10 @@ def main():
         3. MQTT-Loop im Hintergrund starten (on_message läuft in eigenem Thread)
         4. Haupt-Loop: alle ACTUATOR_POLL_SECONDS Aktor-Befehle und
             Sensor-Anfragen drainagen"""
+    # Prometheus scrape endpoint. Bound on every interface inside the
+    # container; only reachable via app-net (no host port published).
+    start_http_server(METRICS_PORT)
+
     tls_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     tls_ctx.load_verify_locations("/run/secrets/ca_cert")
 
