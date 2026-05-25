@@ -179,6 +179,20 @@ pub const Verifier = struct {
         expected_audience: []const u8,
         required_role: []const u8,
     ) VerifyError!void {
+        return self.verifyAt(io, authorization_header, expected_audience, required_role, @as(i64, c.time(null)));
+    }
+
+    /// Same as `verify` but with an injectable clock so tests can pin a
+    /// time relative to fixture token `exp` values. Production code uses
+    /// `verify`, which calls this with libc `time(null)`.
+    pub fn verifyAt(
+        self: *Verifier,
+        io: ?std.Io,
+        authorization_header: []const u8,
+        expected_audience: []const u8,
+        required_role: []const u8,
+        now: i64,
+    ) VerifyError!void {
         const prefix = "Bearer ";
         if (!std.mem.startsWith(u8, authorization_header, prefix)) return error.MissingBearer;
         const token = authorization_header[prefix.len..];
@@ -231,7 +245,6 @@ pub const Verifier = struct {
         // up to its real expiry across both clocks.
         // Compare via `now - skew` instead of `exp + skew` so an attacker
         // who controls exp cannot trip an i64 overflow with maxInt.
-        const now = @as(i64, c.time(null));
         if (claims.exp <= now - clock_skew_seconds) return error.Expired;
         if (!std.mem.eql(u8, claims.iss, self.issuer)) return error.WrongIssuer;
 
@@ -654,6 +667,107 @@ test "parseClaims: aud array followed by realm_roles does not alias" {
     // Critically: audience check must still see the real aud values, not
     // role strings that happened to land in the shared buffer.
     try testing.expect(!claims.matchesAudience("controller-ingest"));
+}
+
+// ---------------------------------------------------------------------------
+// Full verify() error-path coverage.
+//
+// Fixtures (RSA-2048 keypair + 10 pre-signed JWTs) come from
+// src/auth_test_fixtures.zig, generated offline by scripts/genjwt.py to
+// avoid pulling an RSA-signing implementation into the test binary.
+// ---------------------------------------------------------------------------
+
+const fixt = @import("auth_test_fixtures.zig");
+
+fn testVerifier() Verifier {
+    var v = Verifier.init(testing.allocator, "http://nowhere/jwks", fixt.test_iss);
+    v.installKey(fixt.test_kid, stripLeadingZeros(fixt.test_modulus), fixt.test_exponent) catch unreachable;
+    return v;
+}
+
+fn verifyToken(v: *Verifier, token: []const u8) VerifyError!void {
+    var buf: [4096]u8 = undefined;
+    const header = std.fmt.bufPrint(&buf, "Bearer {s}", .{token}) catch unreachable;
+    return v.verifyAt(null, header, "expected-aud", "expected-role", fixt.test_now);
+}
+
+test "verify: accepts a valid token" {
+    var v = testVerifier();
+    defer v.deinit();
+    try verifyToken(&v, fixt.token_valid);
+}
+
+test "verify: accepts a token expired within the skew window" {
+    var v = testVerifier();
+    defer v.deinit();
+    try verifyToken(&v, fixt.token_within_skew);
+}
+
+test "verify: rejects a token expired beyond the skew window" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.Expired, verifyToken(&v, fixt.token_beyond_skew));
+}
+
+test "verify: rejects a token with the wrong issuer" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.WrongIssuer, verifyToken(&v, fixt.token_wrong_iss));
+}
+
+test "verify: rejects a token with the wrong audience" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.WrongAudience, verifyToken(&v, fixt.token_wrong_aud));
+}
+
+test "verify: accepts a token whose audience matches via azp fallback" {
+    var v = testVerifier();
+    defer v.deinit();
+    try verifyToken(&v, fixt.token_azp_only);
+}
+
+test "verify: rejects a token missing the required role" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.MissingRole, verifyToken(&v, fixt.token_no_role));
+}
+
+test "verify: rejects a token signed with an unknown kid (io=null)" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.UnknownKid, verifyToken(&v, fixt.token_unknown_kid));
+}
+
+test "verify: rejects a token whose header advertises HS256" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.UnsupportedAlgorithm, verifyToken(&v, fixt.token_hs256_header));
+}
+
+test "verify: rejects a tampered signature" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(error.InvalidSignature, verifyToken(&v, fixt.token_bad_sig));
+}
+
+test "verify: rejects a malformed Bearer token (non-base64 garbage)" {
+    var v = testVerifier();
+    defer v.deinit();
+    try testing.expectError(
+        error.MalformedToken,
+        v.verifyAt(null, "Bearer !!!.@@@.###", "a", "r", fixt.test_now),
+    );
+}
+
+test "verify: rejects a header whose JSON is malformed" {
+    var v = testVerifier();
+    defer v.deinit();
+    // header decodes to "not json" — base64url-encoded
+    const bad = "bm90IGpzb24.eyJ4Ijoxfg.AA";
+    var buf: [128]u8 = undefined;
+    const header = try std.fmt.bufPrint(&buf, "Bearer {s}", .{bad});
+    try testing.expectError(error.MalformedToken, v.verifyAt(null, header, "a", "r", fixt.test_now));
 }
 
 test "Verifier: rejects token without Bearer prefix" {
