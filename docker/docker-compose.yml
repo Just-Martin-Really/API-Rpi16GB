@@ -161,11 +161,26 @@ services:
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/acl:/mosquitto/config/acl:ro
+      # :rw is required during first-time bootstrap by set_passwords.sh,
+      # which writes the hashed passwd file into the container from host
+      # stdin. After bootstrap the broker process never writes here; the
+      # mount could be flipped to :ro at the cost of an extra recreate
+      # whenever passwords rotate.
       - ./mosquitto/passwd:/mosquitto/config/passwd:rw
       - ./mosquitto/ssl:/mosquitto/ssl:ro
     networks:
       - sensor-net
       - app-net
+    # Mosquitto has no HTTP /health endpoint; the closest in-image probe
+    # is a TCP check on the TLS listener. busybox `nc` returns nonzero
+    # while the process is starting or after a crash, so this is enough
+    # to gate dependents on broker-up rather than "container exists".
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8883"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   # ── Archiver (sensor_data → sensor_data_archive, daily) ───────────────────
   archiver:
@@ -228,7 +243,7 @@ services:
       nginx:
         condition: service_healthy
       mosquitto:
-        condition: service_started
+        condition: service_healthy
       keycloak:
         condition: service_healthy
 
