@@ -181,7 +181,7 @@ sensor01 ──── MQTT ────► mosquitto ──── webserver ─�
                                             controller.py ──── MQTT ────► Pico (heater/cooler)
 ```
 
-The LSTM is one of several command sources. Dashboard buttons and operator scripts (`scripts/heater.sh`, `scripts/cooler.sh`) write to the same table with `issued_by='user'`. `controller.py` drains them all identically, so the LSTM does not need any controller-side changes to take effect; it just inserts rows. `issued_by` is purely for auditing which source produced which command.
+The LSTM is one of several command sources. Dashboard buttons write to the same table with `issued_by='user'`. `controller.py` drains them all identically, so the LSTM does not need any controller-side changes to take effect; it just inserts rows. `issued_by` is purely for auditing which source produced which command.
 
 One iteration of the loop:
 

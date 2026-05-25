@@ -74,9 +74,9 @@ At-least-once. If the controller crashes between a successful publish and the ma
 
 Worst-case latency: poll interval (2 s) plus one publish round-trip. Under broker outage, the publish wait of 5 s per row will dominate, and rows accumulate until the broker recovers.
 
-## Operator scripts
+## Manual override
 
-`scripts/cooler.sh on|off` and `scripts/heater.sh on|off` are thin wrappers around the public endpoint. They fetch an access token from Keycloak's token endpoint via the client-credentials flow, then POST a single command. See `scripts/.env.example` for the required environment (token URL, client id, client secret, backend URL).
+Operators issue heater/cooler commands through the dashboard, which posts to `/api/v1/actuator-command` with a `dashboard-user` token. The Phase-5 `scripts/heater.sh` / `scripts/cooler.sh` wrappers were removed when their `/auth/login` + `dashboard_users` auth path was retired; if a future ops tool needs out-of-band access it should run the same client-credentials flow as the LSTM.
 
 ## Database schema
 
