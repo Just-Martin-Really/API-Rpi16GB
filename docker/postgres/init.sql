@@ -14,11 +14,13 @@ CREATE INDEX IF NOT EXISTS idx_sensor_data_recorded_at ON sensor_data (recorded_
 -- Users are created without passwords here (safe to commit).
 -- Passwords are set after first start via set_passwords.sh — never stored in the repo.
 
--- Write user: used by the backend to ingest sensor readings
+-- Write user: used by the backend to ingest sensor readings.
+-- No UPDATE on sensor_data: ingest only inserts, archive only deletes;
+-- rewriting historical readings should not be reachable from the API.
 CREATE USER iot_write_user;
 GRANT CONNECT ON DATABASE sensor TO iot_write_user;
 GRANT USAGE  ON SCHEMA public TO iot_write_user;
-GRANT SELECT, INSERT, UPDATE ON TABLE sensor_data TO iot_write_user;
+GRANT SELECT, INSERT ON TABLE sensor_data TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE sensor_data_id_seq TO iot_write_user;
 
 -- Read user: used by the dashboard / reporting endpoints

@@ -56,3 +56,30 @@ ALTER TABLE actuator_commands
 -- Phase 6: dashboard_users login table is replaced by Keycloak. Drop it on the
 -- live Pi after the new Zig backend (RS256 + JWKS verify) is deployed.
 DROP TABLE IF EXISTS dashboard_users;
+
+-- Phase 6 grant cleanup: iot_write_user historically had UPDATE on
+-- sensor_data, which no code path uses. Drop it; ingest stays at
+-- SELECT/INSERT plus the DELETE that was already added above for archive.
+REVOKE UPDATE ON TABLE sensor_data FROM iot_write_user;
+
+-- Phase 6: two new roles introduced in init.sql. Backfill them here so a Pi
+-- upgraded via migrate.sql ends up with the same user set as a fresh install.
+-- CREATE USER is not idempotent, hence the DO/EXCEPTION pattern.
+
+DO $$
+BEGIN
+    CREATE USER postgres_exporter_user;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+GRANT CONNECT ON DATABASE sensor TO postgres_exporter_user;
+GRANT pg_monitor TO postgres_exporter_user;
+
+DO $$
+BEGIN
+    CREATE USER grafana_read_user;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+GRANT CONNECT ON DATABASE sensor TO grafana_read_user;
+GRANT USAGE ON SCHEMA public TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data_archive TO grafana_read_user;
