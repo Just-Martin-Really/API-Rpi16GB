@@ -49,6 +49,20 @@ def _build_client(secret_file, base_url="https://www.lab.local", token_url="http
     )
 
 
+def test_missing_ca_cert_path_raises(secret_file):
+    # Regression for the silent verify=False fallback. A bogus path used to
+    # produce verify=False on every call; it now refuses to construct.
+    import pytest
+    with pytest.raises(RuntimeError, match="CA cert not found"):
+        ApiClient(
+            base_url="https://www.lab.local",
+            ca_cert="/tmp/definitely-not-here.crt",
+            token_url="http://kc/realms/iot/token",
+            client_id="lstm-client",
+            client_secret_file=str(secret_file),
+        )
+
+
 def test_first_call_fetches_token_then_calls_api(secret_file):
     client = _build_client(secret_file)
     with patch.object(api_client.requests, "post") as mock_post, \

@@ -40,7 +40,16 @@ class ApiClient:
         client_secret_file=LSTM_CLIENT_SECRET_FILE,
     ):
         self.base_url = base_url.rstrip("/")
-        self.ca_cert = ca_cert if ca_cert and Path(ca_cert).exists() else False
+        # ca_cert=None is an explicit opt-out used by tests (verify=False on
+        # every requests call). Any other value must point at an existing
+        # file; a stale or mistyped path used to silently fall through to
+        # verify=False, which disables TLS verification entirely.
+        if ca_cert is None:
+            self.ca_cert = False
+        elif not Path(ca_cert).exists():
+            raise RuntimeError(f"CA cert not found at {ca_cert}")
+        else:
+            self.ca_cert = ca_cert
         self.token_url = token_url
         self.client_id = client_id
         self.client_secret_file = client_secret_file
