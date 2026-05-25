@@ -68,7 +68,7 @@
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
       "targets": [
-        { "expr": "node_hwmon_temp_celsius", "legendFormat": "{{chip}} {{sensor}}", "refId": "A" }
+        { "expr": "node_thermal_zone_temp{type=\"cpu-thermal\"}", "legendFormat": "{{zone}}", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {
