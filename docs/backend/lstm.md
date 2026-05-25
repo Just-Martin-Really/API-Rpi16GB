@@ -104,7 +104,7 @@ echo "sc_lstm_client" > docker/secrets/keycloak_lstm_secret.txt
 
 The file is mounted into the `lstm` container at `/run/secrets/keycloak_lstm_secret`. For local-workstation development put the same value into the file referenced by `LSTM_CLIENT_SECRET_FILE` in `lstm/.env`.
 
-`api_client.ApiClient` reads the secret, requests a token from `http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token` via the client-credentials grant, caches it, and refreshes `TOKEN_REFRESH_MARGIN_SECONDS` (30 s) before its declared `expires_in`. A 401 from the backend forces a one-shot refresh and a retry, covering token rotations and brief Keycloak restarts.
+`api_client.ApiClient` reads the secret, requests a token from `https://www.lab.local/auth/realms/iot/protocol/openid-connect/token` via the client-credentials grant, caches it, and refreshes `TOKEN_REFRESH_MARGIN_SECONDS` (30 s) before its declared `expires_in`. A 401 from the backend forces a one-shot refresh and a retry, covering token rotations and brief Keycloak restarts.
 
 ### CA cert
 
@@ -351,7 +351,7 @@ lstm:
   environment:
     API_BASE_URL: https://www.lab.local
     API_CA_CERT: /run/secrets/ca_cert
-    KEYCLOAK_TOKEN_URL: http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token
+    KEYCLOAK_TOKEN_URL: https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
     LSTM_CLIENT_ID: lstm-client
     LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
     DATA_SOURCE: api
@@ -374,7 +374,7 @@ lstm:
 Three compose-level details make this work:
 
 - The `keycloak_lstm_secret` secret is declared at the top of `docker-compose.yml` pointing at `./secrets/keycloak_lstm_secret.txt`. The file is gitignored; populate it on the Pi during initial setup with the hardcoded value from `docker/keycloak/iot-realm.json` (currently `sc_lstm_client`, see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)).
-- The `nginx` service has a network alias `www.lab.local` so the TLS hostname matches the cert CN. The `lstm` service hits `https://www.lab.local`, Docker DNS resolves it to the nginx container, and certificate verification against `ca_cert` passes. The token endpoint goes via `http://keycloak:8080` over the internal compose network (no TLS); the access token then travels over TLS to the backend.
+- The `nginx` service has a network alias `www.lab.local` so the TLS hostname matches the cert CN. The `lstm` service hits `https://www.lab.local` for both the Keycloak token endpoint and the backend API, Docker DNS resolves it to the nginx container, and certificate verification against `ca_cert` passes for both hops.
 - The `nginx` service has a TCP healthcheck (`nc -z 127.0.0.1 8443`), and `lstm` waits for `condition: service_healthy` before starting. This avoids spurious failures on `docker compose up` from racing nginx's TLS init. The daemon's per-iteration `try/except` is still there as a backstop for transient network blips later, but cold-start races are no longer one of them.
 
 ### First-time setup on the Pi

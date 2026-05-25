@@ -144,8 +144,10 @@ Useful metrics for Pi monitoring:
 - `node_memory_MemAvailable_bytes` — free memory the kernel can reclaim
   without swapping; better signal than `MemFree`.
 - `node_filesystem_avail_bytes{mountpoint="/"}` — root filesystem headroom.
-- `node_hwmon_temp_celsius` — SoC temperature via `--collector.hwmon`.
-  Useful for catching thermal throttling on the Pi 5 before
+- `node_thermal_zone_temp{type="cpu-thermal"}` — SoC temperature on the
+  Pi. The `hwmon` collector does not publish a useful value on
+  Raspberry Pi; the thermal-zone path under `/sys/class/thermal/` is
+  the canonical source. Useful for catching thermal throttling before
   `vcgencmd get_throttled` flips.
 - `node_load1`, `node_load5`, `node_load15` — load average; matches the
   numbers the boot-hang watchdog logged on the previous incident.
@@ -229,7 +231,7 @@ row per database.
 ### node_exporter (host)
 
 ```sh
-curl -s http://localhost:9100/metrics | grep -E '^node_hwmon_temp_celsius|^node_load1 '
+curl -s http://localhost:9100/metrics | grep -E '^node_thermal_zone_temp|^node_load1 '
 ```
 
 Run this on the Pi itself, not inside a container — node_exporter is on the
@@ -237,12 +239,6 @@ host network namespace.
 
 ## What this stack does not include yet
 
-- **`controller.py` `/metrics`.** No Prometheus client wired in yet; the
-  shipped `actuator.json` Grafana dashboard references
-  `controller_actuator_commands_sent_total`,
-  `controller_sensor_messages_received_total`, `controller_queue_depth`,
-  `controller_broker_reconnects_total` and shows "No data" until added.
-  Title carries `STUB` until then.
 - **Alerts.** Optional per the Phase 6 spec. Will live in
   `docker/prometheus/alert.rules.yml` alongside `prometheus.yml` when added.
 

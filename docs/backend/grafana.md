@@ -21,7 +21,7 @@ in [observability.md](observability.md); this page covers Grafana itself.
   | `lstm`          | LSTM Control Loop           | Prometheus           | live                     |
   | `postgres`      | Postgres (sensor DB)        | Prometheus           | live                     |
   | `sensoren`      | Sensor-Daten (Postgres)     | Postgres             | live                     |
-  | `actuator`      | Actuator (controller.py) STUB | Prometheus         | placeholder, see below   |
+  | `actuator`      | Actuator (controller.py)    | Prometheus           | live                     |
 
 - Keycloak OIDC integration via `GF_AUTH_GENERIC_OAUTH_*` env vars. Realm
   roles map to Grafana roles:
@@ -89,7 +89,7 @@ Browser → https://www.lab.local/grafana/login          (Grafana login page)
        → Grafana exchanges code for tokens at http://keycloak:8080/...
          (internal, no TLS, no nginx)
        → Grafana reads realm_access.roles from the access token
-       → role_attribute_path JMESPath assigns Editor / Viewer / GrafanaAdmin
+       → role_attribute_path JMESPath assigns Viewer / GrafanaAdmin
 ```
 
 `GF_AUTH_GENERIC_OAUTH_AUTH_URL` points at the public hostname because the
@@ -125,10 +125,6 @@ The Grafana folder used by all provisioned dashboards is `API-Rpi16GB`.
 
 ## What is intentionally not yet implemented
 
-- **Actuator dashboard data**. Panels reference `controller_*` metrics
-  that don't exist yet. Wait for the controller.py `/metrics` follow-up
-  PR, then the panels populate without any Grafana change. The dashboard
-  is shipped now so the layout is reviewable.
 - **Alerts**. Optional per the Phase 6 spec. Will live in
   `docker/grafana/provisioning/alerting/` when added.
 
@@ -165,5 +161,5 @@ lstm, postgres_exporter, node_exporter).
 
 For the OIDC flow, open `https://www.lab.local/grafana/` in a browser,
 click "Sign in with Keycloak", log in as `iotuser01` (`Test1234!`), and
-verify the role shown in the top-right is "Editor". `admin-user` realm
-role lifts that to "GrafanaAdmin".
+verify the role shown in the top-right is "Viewer". The `admin-user`
+realm role lifts that to "GrafanaAdmin".
