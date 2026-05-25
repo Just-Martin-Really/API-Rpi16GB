@@ -1,3 +1,22 @@
+# Three curl examples in grafana.md that look like basic-auth strings;
+# the "secret" is a shell command substitution, not a credential.
 aff57ee771a4f5e5179ff36168405a35d687a7f0:docs/backend/grafana.md:curl-auth-user:133
 aff57ee771a4f5e5179ff36168405a35d687a7f0:docs/backend/grafana.md:curl-auth-user:137
 aff57ee771a4f5e5179ff36168405a35d687a7f0:docs/backend/grafana.md:curl-auth-user:141
+
+# JWT fixtures for auth.zig unit tests. Signed against a throwaway
+# RSA keypair from scripts/genjwt.py; never used outside the test suite.
+# .gitleaks.toml has a path-based allowlist for newer gitleaks (>=8.22)
+# that handles regenerations; these fingerprint entries keep the older
+# CI (gitleaks 8.21.2) green for the historical commit that introduced
+# the file.
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:11
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:12
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:13
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:14
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:15
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:16
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:17
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:18
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:19
+4a004ecc4a13bf8617367d2296859f8aff424da0:src/auth_test_fixtures.zig:jwt:20
