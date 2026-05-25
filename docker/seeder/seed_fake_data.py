@@ -82,15 +82,19 @@ REVERSION = 0.05
 def classify(sensor_id: str) -> tuple[str, float, float]:
     """Return (unit, normal_mean, noise_stddev_per_min) for a sensor ID.
 
-    noise_stddev_per_min controls the size of the random step per minute
-    before it is clamped by max_delta_per_min.
+    The sensor ID must contain "temp" or "humid"; nothing else maps to a
+    unit the production schema accepts. The old fallback produced rows
+    with unit="u" that never make it through the real controller.
     """
     name = sensor_id.lower()
     if "temp" in name:
         return ("C", 21.5, 0.05)
     if "humid" in name:
         return ("%", 45.0, 0.3)
-    return ("u", 50.0, 0.5)
+    raise SystemExit(
+        f"unknown sensor kind in id {sensor_id!r}: name must contain"
+        f" 'temp' or 'humid' so the seeder picks a valid unit (C or %)"
+    )
 
 
 def delta_cap_for(sensor_id: str, base_cap: float) -> float:

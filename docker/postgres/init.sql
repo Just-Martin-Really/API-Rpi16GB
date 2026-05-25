@@ -1,11 +1,17 @@
 -- Runs once on first container start against the 'sensor' database.
 
+-- CHECK constraints below mirror the app-layer regexes in controller.py
+-- (ACTUATOR_ID_RE / SENSOR_ID_RE / COMMAND_RE) so a row that bypasses the
+-- API (psql, future scripts, accidental seeder drift) still fails fast.
 CREATE TABLE IF NOT EXISTS sensor_data (
     id          BIGSERIAL        PRIMARY KEY,
     sensor_id   VARCHAR(64)      NOT NULL,
     value       DOUBLE PRECISION NOT NULL,
     unit        VARCHAR(16)      NOT NULL,
-    recorded_at TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+    recorded_at TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_sensor_data_sensor_id CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_sensor_data_unit      CHECK (unit IN ('C', '%'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_data_sensor_id   ON sensor_data (sensor_id);
@@ -40,7 +46,11 @@ CREATE TABLE IF NOT EXISTS actuator_commands (
     sent_at     TIMESTAMPTZ,
 
     CONSTRAINT chk_actuator_commands_issued_by
-        CHECK (issued_by IN ('user', 'machine'))
+        CHECK (issued_by IN ('user', 'machine')),
+    CONSTRAINT chk_actuator_commands_actuator_id
+        CHECK (actuator_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_actuator_commands_command
+        CHECK (command ~ '^[A-Z0-9_]+$')
 );
 
 CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
@@ -57,7 +67,12 @@ CREATE TABLE IF NOT EXISTS sensor_requests (
     sensor_id   VARCHAR(64)  NOT NULL,
     command     VARCHAR(64)  NOT NULL,
     issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    sent_at     TIMESTAMPTZ
+    sent_at     TIMESTAMPTZ,
+
+    CONSTRAINT chk_sensor_requests_sensor_id
+        CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_sensor_requests_command
+        CHECK (command ~ '^[A-Z0-9_]+$')
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_requests_unsent
@@ -74,7 +89,12 @@ CREATE TABLE IF NOT EXISTS sensor_data_archive (
     value       DOUBLE PRECISION NOT NULL,
     unit        VARCHAR(16)      NOT NULL,
     recorded_at TIMESTAMPTZ      NOT NULL,
-    archived_at TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+    archived_at TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_sensor_data_archive_sensor_id
+        CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_sensor_data_archive_unit
+        CHECK (unit IN ('C', '%'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_archive_sensor_id   ON sensor_data_archive (sensor_id);
