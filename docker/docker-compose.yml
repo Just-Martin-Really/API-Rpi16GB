@@ -227,8 +227,8 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
-      API_BASE_URL: https://www.lab.local
-      KEYCLOAK_TOKEN_URL: https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
+      API_BASE_URL: https://www.lab.local:8443
+      KEYCLOAK_TOKEN_URL: https://www.lab.local:8443/auth/realms/iot/protocol/openid-connect/token
       CONTROLLER_CLIENT_ID: controller-client
       CONTROLLER_CLIENT_SECRET_FILE: /run/secrets/keycloak_controller_secret
     secrets:
@@ -254,9 +254,9 @@ services:
       dockerfile: docker/lstm/Dockerfile
     restart: unless-stopped
     environment:
-      API_BASE_URL: https://www.lab.local
+      API_BASE_URL: https://www.lab.local:8443
       API_CA_CERT: /run/secrets/ca_cert
-      KEYCLOAK_TOKEN_URL: https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
+      KEYCLOAK_TOKEN_URL: https://www.lab.local:8443/auth/realms/iot/protocol/openid-connect/token
       LSTM_CLIENT_ID: lstm-client
       LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
       DATA_SOURCE: api
