@@ -99,7 +99,7 @@ The control loop authenticates as the `lstm-client` confidential client in the `
 The client secret is hardcoded in `iot-realm.json` (see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)) and the same verbatim value lives in the secret file:
 
 ```sh
-echo "sc_lstm_client" > docker/secrets/keycloak_lstm_secret.txt
+printf 'sc_lstm_client' > docker/secrets/keycloak_lstm_secret.txt
 ```
 
 The file is mounted into the `lstm` container at `/run/secrets/keycloak_lstm_secret`. For local-workstation development put the same value into the file referenced by `LSTM_CLIENT_SECRET_FILE` in `lstm/.env`.
@@ -385,7 +385,7 @@ Three compose-level details make this work:
 4. Write the Keycloak `lstm-client` secret. The value is hardcoded in `docker/keycloak/iot-realm.json` and the secret file must carry the identical string:
 
    ```sh
-   echo "sc_lstm_client" > docker/secrets/keycloak_lstm_secret.txt
+   printf 'sc_lstm_client' > docker/secrets/keycloak_lstm_secret.txt
    chmod 600 docker/secrets/keycloak_lstm_secret.txt
    ```
 

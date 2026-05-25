@@ -26,8 +26,8 @@ Beide Bugs lagen nicht in meinem Code, sondern in der umqtt-Bibliothek auf dem P
 
 ### nginx Healthcheck
 
-Das OWASP-CRS-Image bringt ein eigenes Healthcheck-Skript mit, das gegen `https://localhost:8443/healthz` läuft. Unser Server-Block lehnt nach der Subnet-Whitelist alle übrigen Quellen mit `deny all` ab, also auch Loopback. Der Container wurde dadurch dauerhaft als `unhealthy` markiert und neu gestartet, obwohl nginx selbst lief.
+Das OWASP-CRS-Image bringt ein eigenes Healthcheck-Skript mit, das ursprünglich gegen `https://localhost:8443/healthz` lief. Unser Server-Block lehnt nach der Subnet-Whitelist alle übrigen Quellen mit `deny all` ab, also auch Loopback. Der Container wurde dadurch dauerhaft als `unhealthy` markiert und neu gestartet, obwohl nginx selbst lief.
 
-Die Lösung ist eine dedizierte `location = /healthz` ganz oben im Server-Block: nur `127.0.0.1`, ModSecurity aus, kein Access-Log, gibt direkt `200 ok` zurück. Der Healthcheck umgeht damit Allowlist und WAF, von außen bleibt `/healthz` weiterhin gesperrt (403).
+Die Lösung ist eine dedizierte `location = /healthz` ganz oben im Server-Block: nur `127.0.0.1`, ModSecurity aus, kein Access-Log, gibt direkt `200 ok` zurück. Der eigentliche Healthcheck in `docker-compose.yml` läuft jetzt per `wget -q --spider http://127.0.0.1:8080/healthz` über den internen HTTP-Listener auf 8080 (TLS-Terminierung kostet auf jedem Tick Zertifikatsarbeit und bringt für einen container-lokalen Probe nichts). Der Healthcheck umgeht so Allowlist und WAF, von außen bleibt `/healthz` weiterhin gesperrt (403).
 
 Der Pfad ist bewusst nicht auf das Backend gemappt: würde der Container-Healthcheck `/health` (das per `proxy_pass` zum Zig-Backend geht) prüfen, würde ein Backend-Ausfall den nginx-Container ebenfalls als unhealthy markieren und einen Cascade-Restart auslösen.

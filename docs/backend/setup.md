@@ -119,9 +119,10 @@ Generate Keycloak secret files. The Keycloak DB and admin passwords are random; 
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_db_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_admin_password.txt
 
-# Client secrets — must match the hardcoded values in iot-realm.json verbatim
-echo "sc_controller_client" > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
-echo "sc_lstm_client"       > ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
+# Client secrets — must match the hardcoded values in iot-realm.json verbatim.
+# printf, not echo: Keycloak rejects a client_secret with a trailing newline.
+printf 'sc_controller_client' > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
+printf 'sc_lstm_client'       > ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
 
 chmod 600 ~/API-Rpi16GB/docker/secrets/keycloak_*.txt
 ```

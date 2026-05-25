@@ -2,7 +2,17 @@
 
 Dieses Dokument beschreibt, was ich auf dem 16-GB-Raspberry-Pi-5 gebaut habe, wie es entstanden ist, wie man es einrichtet, und was noch fehlt.
 
-> **Phase 6 Update:** Die ursprüngliche HS256-JWT-Auth (eigener `/auth/login`-Endpoint, `dashboard_users`-Tabelle, `issueToken`/`validateBearer` in `auth.zig`, `src/handlers/login.zig`) wurde durch Keycloak ersetzt. Tokens werden jetzt extern von Keycloak (Realm `iot`) ausgestellt, das Backend prüft RS256-Signaturen gegen das JWKS-Endpoint und gleicht pro Route Audience und Realm-Rolle ab. Die Schritte 6 und 8 unten beschreiben den historischen Phase-4-Stand; aktuelle Wahrheit dazu in [api.md](api.md) und [architecture.md](architecture.md).
+> **Phase 6 Update.** Dieses Dokument erzählt den Bau-Verlauf bis Phase 4. Phase 6 hat den Stack an mehreren Stellen umgebaut; die einzelnen Schritte unten sind weiterhin historisch korrekt, aber die heutige Wahrheit steht in den fett markierten Verweisen:
+>
+> - **Auth** ([keycloak-integration.md](keycloak-integration.md), [api.md](api.md)). Die ursprüngliche HS256-JWT-Auth (`/auth/login`, `dashboard_users`-Tabelle, `issueToken`/`validateBearer`, `src/handlers/login.zig`) wurde durch Keycloak (Realm `iot`) ersetzt. Backend prüft RS256-Signaturen gegen das JWKS-Endpoint und gleicht pro Route Audience und Realm-Rolle ab.
+> - **Controller** ([controller.md](controller.md)). Der `x-api-key`-Pfad zu `server.js` ist weg. Controller spricht heute direkt mit dem Zig-Backend per Keycloak Client-Credentials (`controller-client`/`controller-ingest`).
+> - **server.js raus** ([api.md](api.md)). Der Node-Webserver ist gelöscht; nginx routet nur noch `/api/v1/*` zum Zig-Backend.
+> - **LSTM** ([lstm.md](lstm.md)). Eigener Service, Client-Credentials gegen Keycloak (`lstm-client`/`lstm-control`).
+> - **Frontend** ([../frontend/frontend.md](../frontend/frontend.md)). Statisches SPA unter `docker/dashboard/`, Keycloak-OIDC im Browser, Backend-Calls mit Bearer Token.
+> - **Observability** ([observability.md](observability.md), [grafana.md](grafana.md)). Prometheus + Grafana, OIDC-Login für Grafana, fünf Scrape-Targets, sechs provisionierte Dashboards.
+> - **Schemas** (`docker/postgres/init.sql`, `migrate.sql`). Neue Rollen `postgres_exporter_user` + `grafana_read_user`, CHECK-Constraints auf `sensor_id`/`unit`/`command`, `dashboard_users` ist gedroppt.
+>
+> Die Schritte 6 und 8 unten beschreiben den historischen Phase-4-Stand.
 
 ---
 

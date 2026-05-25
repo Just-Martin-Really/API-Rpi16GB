@@ -186,7 +186,7 @@ hinterlegt (Feld `secret` beim Client `controller-client`).
 ### Secret einmalig auf dem Pi anlegen
 
 ```sh
-echo "sc_controller_client" > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
+printf 'sc_controller_client' > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
 chmod 600 ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
 ```
 
