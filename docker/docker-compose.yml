@@ -425,13 +425,14 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.1@sha256:be6a86215213145bfb4fb3e2b3ab982a806d00262655abdcf3ffa6a38d241c7c
     container_name: keycloak_server
-    command: start-dev --import-realm
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'export KC_DB_PASSWORD=$$(cat /run/secrets/keycloak_db_password) && exec /opt/keycloak/bin/kc.sh start-dev --import-realm'
     restart: unless-stopped
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
       KC_DB_USERNAME: keycloak
-      KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
       KC_HOSTNAME: https://www.lab.local
