@@ -193,14 +193,24 @@ pub const Verifier = struct {
         if (!std.mem.eql(u8, header.alg, "RS256")) return error.UnsupportedAlgorithm;
 
         // Key lookup; on miss, refresh once and retry.
-        var key_opt = self.findKey(header.kid);
-        if (key_opt == null) {
+        // Copy the key material into stack-local buffers under the mutex so
+        // a concurrent refreshKeys (which resets keys_arena) cannot turn the
+        // slices into a use-after-free while we are mid-verifyRs256.
+        var modulus_buf: [512]u8 = undefined;   // up to RSA-4096 modulus
+        var exponent_buf: [16]u8 = undefined;   // exponent is almost always 65537 (3 bytes)
+        var found = self.copyKey(header.kid, &modulus_buf, &exponent_buf);
+        if (found == null) {
             if (io) |io_h| {
                 self.refreshKeys(io_h) catch return error.UnknownKid;
-                key_opt = self.findKey(header.kid);
+                found = self.copyKey(header.kid, &modulus_buf, &exponent_buf);
             }
         }
-        const key = key_opt orelse return error.UnknownKid;
+        const found_key = found orelse return error.UnknownKid;
+        const key = Key{
+            .kid = "",
+            .modulus = modulus_buf[0..found_key.modulus_len],
+            .exponent = exponent_buf[0..found_key.exponent_len],
+        };
 
         // Signature.
         const signing_input = token[0 .. parts.header_b64.len + 1 + parts.payload_b64.len];
@@ -219,19 +229,51 @@ pub const Verifier = struct {
         // be slow to converge after a power cut; 30 s matches the controller
         // token-refresh margin so a token accepted at issue-time stays usable
         // up to its real expiry across both clocks.
+        // Compare via `now - skew` instead of `exp + skew` so an attacker
+        // who controls exp cannot trip an i64 overflow with maxInt.
         const now = @as(i64, c.time(null));
-        if (claims.exp + clock_skew_seconds <= now) return error.Expired;
+        if (claims.exp <= now - clock_skew_seconds) return error.Expired;
         if (!std.mem.eql(u8, claims.iss, self.issuer)) return error.WrongIssuer;
 
         if (!claims.matchesAudience(expected_audience)) return error.WrongAudience;
         if (!claims.hasRole(required_role)) return error.MissingRole;
     }
 
+    /// Test-only / introspection: look up a key by kid. The returned slices
+    /// point into the verifier's arena and become invalid after the next
+    /// refreshKeys. Production callers must use copyKey instead.
     fn findKey(self: *Verifier, kid: []const u8) ?Key {
         self.mutex.lock();
         defer self.mutex.unlock();
         for (self.keys.items) |k| {
             if (std.mem.eql(u8, k.kid, kid)) return k;
+        }
+        return null;
+    }
+
+    /// Look up a key by kid and copy its modulus/exponent into caller-owned
+    /// buffers under the lock. Returns the byte counts written, or null if
+    /// the kid is unknown or either buffer is too small. Safe to use across
+    /// a subsequent refreshKeys.
+    pub const KeyLengths = struct {
+        modulus_len: usize,
+        exponent_len: usize,
+    };
+    fn copyKey(
+        self: *Verifier,
+        kid: []const u8,
+        modulus_out: []u8,
+        exponent_out: []u8,
+    ) ?KeyLengths {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        for (self.keys.items) |k| {
+            if (!std.mem.eql(u8, k.kid, kid)) continue;
+            if (k.modulus.len > modulus_out.len) return null;
+            if (k.exponent.len > exponent_out.len) return null;
+            @memcpy(modulus_out[0..k.modulus.len], k.modulus);
+            @memcpy(exponent_out[0..k.exponent.len], k.exponent);
+            return .{ .modulus_len = k.modulus.len, .exponent_len = k.exponent.len };
         }
         return null;
     }
@@ -345,7 +387,7 @@ fn parseClaims(json_bytes: []const u8) !Claims {
             claims.aud = .{ .single = buf[i + 1 .. end] };
         } else if (i < buf.len and buf[i] == '[') {
             const arr_end = std.mem.indexOfScalarPos(u8, buf, i, ']') orelse return error.MalformedAud;
-            claims.aud = .{ .multi = try splitStringArray(buf[i + 1 .. arr_end]) };
+            claims.aud = .{ .multi = try splitStringArray(buf[i + 1 .. arr_end], &aud_slots) };
         }
     }
 
@@ -355,16 +397,22 @@ fn parseClaims(json_bytes: []const u8) !Claims {
             var i = idx_roles;
             while (i < buf.len and buf[i] != '[') i += 1;
             const arr_end = std.mem.indexOfScalarPos(u8, buf, i, ']') orelse return error.MalformedRoles;
-            claims.realm_roles = try splitStringArray(buf[i + 1 .. arr_end]);
+            claims.realm_roles = try splitStringArray(buf[i + 1 .. arr_end], &role_slots);
         }
     }
 
     return claims;
 }
 
-threadlocal var role_slots: [16][]const u8 = undefined;
+// Two separate slot buffers so parsing aud-as-array (into aud_slots) and
+// realm_roles (into role_slots) cannot alias. Previously both used the same
+// buffer, which silently overwrote claims.aud.multi when realm_roles was
+// parsed afterwards. Bumped from 16 to 32 to leave headroom for the
+// Keycloak default roles plus composites.
+threadlocal var aud_slots: [32][]const u8 = undefined;
+threadlocal var role_slots: [32][]const u8 = undefined;
 
-fn splitStringArray(arr_body: []const u8) ![]const []const u8 {
+fn splitStringArray(arr_body: []const u8, out: [][]const u8) ![]const []const u8 {
     var n: usize = 0;
     var i: usize = 0;
     while (i < arr_body.len) {
@@ -372,12 +420,12 @@ fn splitStringArray(arr_body: []const u8) ![]const []const u8 {
         if (i >= arr_body.len) break;
         const start = i + 1;
         const end = std.mem.indexOfScalarPos(u8, arr_body, start, '"') orelse return error.MalformedArray;
-        if (n >= role_slots.len) return error.TooManyEntries;
-        role_slots[n] = arr_body[start..end];
+        if (n >= out.len) return error.TooManyEntries;
+        out[n] = arr_body[start..end];
         n += 1;
         i = end + 1;
     }
-    return role_slots[0..n];
+    return out[0..n];
 }
 
 fn findKey(buf: []const u8, key: []const u8) ?usize {
@@ -569,6 +617,43 @@ test "Verifier: installKey then findKey" {
     try testing.expectEqualStrings("kid1", k.kid);
     try testing.expectEqualSlices(u8, &.{ 0xAB, 0xCD }, k.modulus);
     try testing.expect(v.findKey("other") == null);
+}
+
+test "Verifier: copyKey writes into caller buffer" {
+    var v = Verifier.init(testing.allocator, "http://nowhere/jwks", "iss");
+    defer v.deinit();
+    try v.installKey("kid1", &.{ 0xAB, 0xCD, 0xEF }, &.{ 0x01, 0x00, 0x01 });
+    var modulus_buf: [16]u8 = undefined;
+    var exponent_buf: [16]u8 = undefined;
+    const found = v.copyKey("kid1", &modulus_buf, &exponent_buf) orelse return error.NotFound;
+    try testing.expectEqual(@as(usize, 3), found.modulus_len);
+    try testing.expectEqual(@as(usize, 3), found.exponent_len);
+    try testing.expectEqualSlices(u8, &.{ 0xAB, 0xCD, 0xEF }, modulus_buf[0..found.modulus_len]);
+}
+
+test "Verifier: copyKey returns null when buffer too small" {
+    var v = Verifier.init(testing.allocator, "http://nowhere/jwks", "iss");
+    defer v.deinit();
+    try v.installKey("kid1", &.{ 0xAB, 0xCD, 0xEF, 0x12 }, &.{ 0x01, 0x00, 0x01 });
+    var modulus_buf: [2]u8 = undefined;
+    var exponent_buf: [16]u8 = undefined;
+    try testing.expect(v.copyKey("kid1", &modulus_buf, &exponent_buf) == null);
+}
+
+test "parseClaims: aud array followed by realm_roles does not alias" {
+    // Regression: aud_slots and role_slots used to share one buffer, so
+    // parsing realm_roles after an aud array overwrote claims.aud.multi.
+    const json =
+        \\{"iss":"x","exp":1,"aud":["controller-client","account"],"realm_access":{"roles":["controller-ingest","offline_access"]}}
+    ;
+    const claims = try parseClaims(json);
+    try testing.expect(claims.matchesAudience("controller-client"));
+    try testing.expect(claims.matchesAudience("account"));
+    try testing.expect(claims.hasRole("controller-ingest"));
+    try testing.expect(claims.hasRole("offline_access"));
+    // Critically: audience check must still see the real aud values, not
+    // role strings that happened to land in the shared buffer.
+    try testing.expect(!claims.matchesAudience("controller-ingest"));
 }
 
 test "Verifier: rejects token without Bearer prefix" {
