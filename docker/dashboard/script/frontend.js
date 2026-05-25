@@ -1,4 +1,8 @@
-"use strict";
+// keycloak-js 26.x is ESM-only (the bundled adapter at /auth/js/keycloak.js
+// was dropped from Keycloak in 25+). The adapter is now self-hosted as a
+// sibling file and imported here, which is why this script is loaded with
+// type="module" in index.html.
+import Keycloak from "./keycloak.js";
 
 // Keycloak config. Realm and client must match iot-realm.json in Keycloak.
 const KEYCLOAK_CONFIG = {
