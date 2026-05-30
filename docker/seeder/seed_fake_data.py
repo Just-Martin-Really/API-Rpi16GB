@@ -1,10 +1,12 @@
 """
 seed_fake_data.py — fill sensor_data and sensor_data_archive with fake data.
 
-Generates realistic temperature and humidity readings as a per-sensor random
-walk (so consecutive readings differ smoothly over time, not jumping multiple
-degrees per minute) and optionally injects anomalies to simulate a
-malfunctioning sensor.
+Generates realistic temperature and humidity readings driven by a single
+shared ambient curve so that:
+  - all sensors in a run see the same diurnal cycle and slow multi-day drift
+  - humidity moves opposite to temperature (warmer air → lower RH)
+  - per-sensor noise is a small mean-reverting walk on top of the ambient,
+    not a free random walk that defines the whole signal
 
 Smart split based on timestamp:
   - rows with recorded_at < NOW() - 7 days  →  sensor_data_archive
@@ -16,16 +18,22 @@ Sensor IDs use a "demo-" prefix so fake data is trivial to clean up:
   DELETE FROM sensor_data         WHERE sensor_id LIKE 'demo-%';
   DELETE FROM sensor_data_archive WHERE sensor_id LIKE 'demo-%';
 
-How values are generated:
-  - For each sensor, rows are spread evenly across the time window and
-    processed in chronological order.
-  - Each reading is the previous reading nudged by a small random step plus
-    a mean-reversion pull back toward the sensor's normal mean.
-  - The step is hard-capped at max_delta_per_min * dt_minutes, so a 60-second
-    gap between samples can never move the value by more than max_delta_per_min.
-  - Defaults assume a normally heated room: temp ~21.5 °C, humidity ~45 %.
-  - Anomalies bypass the cap on purpose and jump to mean + anomaly_magnitude
-    (that is what makes them anomalous).
+Signal model:
+  ambient_offset(t) = diurnal_sine(t) + slow_drift_sine(t) + coarse_walk(t)
+  temperature(t)    = TEMP_MEAN + ambient_offset(t) + per_sensor_deviation(t)
+  humidity(t)       = HUMIDITY_MEAN - K * ambient_offset(t) + per_sensor_deviation(t)
+
+  per_sensor_deviation is a small mean-reverting walk with a per-minute cap,
+  so individual readings stay near the ambient curve and never drift away.
+
+Anomalies (rare, short, never multi-hour):
+  - spike       : one sample at mean ± anomaly_magnitude, then back to curve
+  - dropout     : 2-5 samples frozen at the last value (stuck driver)
+  - disconnect  : 1-3 samples at sensor sentinel (-127 for temp, 0 for humid)
+  - noise_burst : 3-5 samples with elevated noise around the mean
+
+The per-sensor deviation is NOT updated while an anomaly is in flight, so the
+next normal sample resumes the walk from the pre-glitch state.
 
 Usage (from the docker/ directory on the Pi):
   docker compose --profile tools run --rm seeder [options]
@@ -50,10 +58,10 @@ CLI options:
   --days N                 timestamp spread in days                   (default 30)
   --sensors a,b,c          comma-separated sensor IDs                 (default demo-temp-01,demo-humid-01)
   --anomaly-percent P      percentage of rows that are anomalies      (default 0.5, set 0 to disable)
-  --anomaly-magnitude M    how far an anomaly deviates from mean,
-                           in the sensor's unit (°C, % or unitless)   (default 15.0)
-  --max-delta-per-min F    cap on per-minute change for temperature
-                           sensors (humidity is scaled x6 internally) (default 0.25)
+  --anomaly-magnitude M    spike deviation from mean, in sensor unit  (default 5.0)
+  --max-delta-per-min F    cap on per-minute change for the per-sensor
+                           walk (humidity is scaled x6 internally)    (default 0.25)
+  --diurnal-amplitude A    half-swing of the 24h cycle, in °C         (default 1.5)
 
 Environment (provided by docker-compose):
   DB_HOST            postgres hostname inside app-net
@@ -73,10 +81,25 @@ from psycopg2.extras import execute_values
 BATCH_SIZE = 500
 ARCHIVE_THRESHOLD_DAYS = 7
 
-# Mean-reversion strength: each step pulls (mean - value) * REVERSION
-# fraction back toward the mean before adding random noise. Low enough
-# that walks meander, high enough that they don't drift away forever.
+# Mean-reversion strength of the per-sensor deviation walk back toward 0.
 REVERSION = 0.05
+
+TEMP_MEAN = 21.5
+HUMIDITY_MEAN = 45.0
+
+# Diurnal cycle: indoor temperature peaks in the afternoon, dips before dawn.
+DIURNAL_PEAK_HOUR_UTC = 15.0
+
+# Multi-day weather-like meander layered on top of the diurnal cycle.
+SLOW_DRIFT_AMPLITUDE_C = 0.6
+SLOW_DRIFT_PERIOD_DAYS = 4.0
+
+# Indoor RH drops by roughly 2-4 % per °C of warming when absolute moisture
+# is held constant. 2.5 sits in the middle of the empirical range.
+HUMIDITY_TEMP_COUPLING = 2.5
+
+# Anomaly types are picked uniformly when an anomaly fires.
+ANOMALY_TYPES = ("spike", "dropout", "disconnect", "noise_burst")
 
 
 def classify(sensor_id: str) -> tuple[str, float, float]:
@@ -88,9 +111,9 @@ def classify(sensor_id: str) -> tuple[str, float, float]:
     """
     name = sensor_id.lower()
     if "temp" in name:
-        return ("C", 21.5, 0.05)
+        return ("C", TEMP_MEAN, 0.05)
     if "humid" in name:
-        return ("%", 45.0, 0.3)
+        return ("%", HUMIDITY_MEAN, 0.3)
     raise SystemExit(
         f"unknown sensor kind in id {sensor_id!r}: name must contain"
         f" 'temp' or 'humid' so the seeder picks a valid unit (C or %)"
@@ -138,19 +161,102 @@ def insert_batch_archive(cur, rows):
     )
 
 
-def generate_series(sensor_id, count, span_seconds, now,
-                    anomaly_indices, anomaly_magnitude, base_delta_cap):
-    """Yield (sensor_id, value, unit, recorded_at) tuples for one sensor.
+def build_ambient_offset(span_seconds: float, now: datetime,
+                         diurnal_amplitude: float):
+    """Return a callable ambient_offset(ts) → °C-offset from TEMP_MEAN.
 
-    Walks chronologically forward from oldest to newest so that each value
-    can depend on the previous one. anomaly_indices is a set of positions
-    (0..count-1) where the value should be forced to mean + anomaly_magnitude.
+    The same callable is used by every sensor in the run, so the diurnal cycle
+    and slow drift are shared (and humidity tracks temperature inversely).
+
+    The slow component is a mean-reverting walk precomputed on a 10-minute
+    grid; we interpolate linearly between grid points at lookup time.
     """
+    grid_step_seconds = 10 * 60
+    n_points = max(2, int(span_seconds // grid_step_seconds) + 2)
+    walk = [0.0]
+    walk_reversion = 0.02
+    walk_stddev = 0.04
+    for _ in range(n_points - 1):
+        pull = -walk[-1] * walk_reversion
+        walk.append(walk[-1] + pull + random.gauss(0.0, walk_stddev))
+    oldest = now - timedelta(seconds=span_seconds)
+
+    # Phase the diurnal sine so it peaks at DIURNAL_PEAK_HOUR_UTC.
+    phase_hours = DIURNAL_PEAK_HOUR_UTC - 6.0
+
+    def offset(ts: datetime) -> float:
+        elapsed = (ts - oldest).total_seconds()
+
+        idx_f = elapsed / grid_step_seconds
+        i0 = max(0, min(n_points - 2, int(idx_f)))
+        frac = idx_f - i0
+        slow_walk = walk[i0] * (1 - frac) + walk[i0 + 1] * frac
+
+        hour = ts.hour + ts.minute / 60.0 + ts.second / 3600.0
+        diurnal = diurnal_amplitude * math.sin(
+            2 * math.pi * (hour - phase_hours) / 24.0
+        )
+
+        drift = SLOW_DRIFT_AMPLITUDE_C * math.sin(
+            2 * math.pi * elapsed / (SLOW_DRIFT_PERIOD_DAYS * 86400.0)
+        )
+
+        return diurnal + drift + slow_walk
+
+    return offset
+
+
+def plan_anomalies(anomaly_indices, count):
+    """Turn a flat set of anomaly indices into {start_idx: (kind, run_len)}.
+
+    Multi-sample runs (dropout, disconnect, noise_burst) consume consecutive
+    indices, so any anomaly index that lands inside an earlier run is dropped.
+    """
+    plan = {}
+    consumed = set()
+    for idx in sorted(anomaly_indices):
+        if idx in consumed:
+            continue
+        kind = random.choice(ANOMALY_TYPES)
+        if kind == "spike":
+            run_len = 1
+        elif kind == "dropout":
+            run_len = random.randint(2, 5)
+        elif kind == "disconnect":
+            run_len = random.randint(1, 3)
+        else:  # noise_burst
+            run_len = random.randint(3, 5)
+        run_len = min(run_len, count - idx)
+        plan[idx] = (kind, run_len)
+        for k in range(idx, idx + run_len):
+            consumed.add(k)
+    return plan
+
+
+def anomaly_values(kind, current_value, mean, magnitude, is_temp, run_len):
+    """Replacement values for a `run_len`-long anomaly window."""
+    if kind == "spike":
+        sign = random.choice((-1.0, 1.0))
+        return [mean + sign * magnitude]
+    if kind == "dropout":
+        return [current_value] * run_len
+    if kind == "disconnect":
+        sentinel = -127.0 if is_temp else 0.0
+        return [sentinel] * run_len
+    if kind == "noise_burst":
+        stddev = max(magnitude * 0.4, 0.5)
+        return [mean + random.gauss(0.0, stddev) for _ in range(run_len)]
+    return [current_value]
+
+
+def generate_series(sensor_id, count, span_seconds, now,
+                    anomaly_indices, anomaly_magnitude, base_delta_cap,
+                    ambient_offset):
+    """Yield (sensor_id, value, unit, recorded_at) tuples for one sensor."""
     unit, mean, noise_stddev_per_min = classify(sensor_id)
     delta_cap = delta_cap_for(sensor_id, base_delta_cap)
+    is_temp = unit == "C"
 
-    # Evenly-spaced timestamps from oldest to newest. Tiny jitter so multiple
-    # sensors don't all land on the exact same recorded_at.
     if count == 1:
         timestamps = [now - timedelta(seconds=span_seconds / 2)]
     else:
@@ -163,32 +269,50 @@ def generate_series(sensor_id, count, span_seconds, now,
             for i in range(count)
         ]
 
-    value = random.gauss(mean, noise_stddev_per_min * 10)  # seed somewhere near mean
+    # Per-sensor deviation from the shared ambient curve. Small, mean-reverting.
+    deviation = random.gauss(0.0, noise_stddev_per_min * 5)
     prev_ts = timestamps[0]
 
-    for i, ts in enumerate(timestamps):
-        if i in anomaly_indices:
-            # Anomaly: snap to mean + magnitude, bypass the per-minute cap on
-            # purpose. The next non-anomaly reading will start walking back
-            # from this spike.
-            value = mean + anomaly_magnitude
-        else:
-            dt_minutes = max((ts - prev_ts).total_seconds() / 60.0, 1e-6)
-            # Mean-reverting random step, clamped to physical realism.
-            # Noise scales with sqrt(dt) so variance grows linearly in time,
-            # which is the standard Wiener-process behavior for a random walk.
-            pull = (mean - value) * REVERSION
-            noise = random.gauss(0.0, noise_stddev_per_min * math.sqrt(dt_minutes))
-            step_value = pull + noise
-            max_step = delta_cap * dt_minutes
-            if step_value > max_step:
-                step_value = max_step
-            elif step_value < -max_step:
-                step_value = -max_step
-            value += step_value
+    plan = plan_anomalies(anomaly_indices, count)
 
+    def underlying_at(ts):
+        amb = ambient_offset(ts)
+        if is_temp:
+            return mean + amb + deviation
+        return mean - HUMIDITY_TEMP_COUPLING * amb + deviation
+
+    i = 0
+    while i < len(timestamps):
+        ts = timestamps[i]
+
+        if i in plan:
+            kind, run_len = plan[i]
+            base_for_anomaly = underlying_at(ts)
+            values = anomaly_values(kind, base_for_anomaly, mean,
+                                    anomaly_magnitude, is_temp, run_len)
+            for k, v in enumerate(values):
+                yield (sensor_id, round(v, 2), unit, timestamps[i + k])
+            # deviation is intentionally NOT advanced during an anomaly: the
+            # next normal sample picks up where the pre-glitch walk left off.
+            prev_ts = timestamps[i + run_len - 1]
+            i += run_len
+            continue
+
+        dt_minutes = max((ts - prev_ts).total_seconds() / 60.0, 1e-6)
+        pull = -deviation * REVERSION
+        noise = random.gauss(0.0, noise_stddev_per_min * math.sqrt(dt_minutes))
+        step_value = pull + noise
+        max_step = delta_cap * dt_minutes
+        if step_value > max_step:
+            step_value = max_step
+        elif step_value < -max_step:
+            step_value = -max_step
+        deviation += step_value
+
+        value = underlying_at(ts)
         prev_ts = ts
         yield (sensor_id, round(value, 2), unit, ts)
+        i += 1
 
 
 def main():
@@ -198,11 +322,13 @@ def main():
     parser.add_argument("--sensors", type=str, default="demo-temp-01,demo-humid-01")
     parser.add_argument("--anomaly-percent", type=float, default=0.5,
                         help="percentage of rows that are anomalies; 0 disables anomalies")
-    parser.add_argument("--anomaly-magnitude", type=float, default=15.0,
-                        help="how far an anomaly deviates from the sensor mean, in its unit")
+    parser.add_argument("--anomaly-magnitude", type=float, default=5.0,
+                        help="spike anomaly deviation from the sensor mean, in its unit")
     parser.add_argument("--max-delta-per-min", type=float, default=0.25,
-                        help="cap on per-minute change for temperature sensors "
+                        help="cap on per-minute change for the per-sensor walk "
                              "(humidity is scaled internally)")
+    parser.add_argument("--diurnal-amplitude", type=float, default=1.5,
+                        help="half-swing of the 24h ambient cycle, in °C")
     args = parser.parse_args()
 
     sensors = [s.strip() for s in args.sensors.split(",") if s.strip()]
@@ -215,10 +341,13 @@ def main():
     archive_cutoff = now - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
     span_seconds = args.days * 24 * 3600
 
+    ambient_offset = build_ambient_offset(span_seconds, now, args.diurnal_amplitude)
+
     print(f"generating {args.rows} rows across {args.days} days "
           f"for sensors: {', '.join(sensors)} "
-          f"(anomalies: {args.anomaly_percent}% @ +{args.anomaly_magnitude}, "
-          f"max temp delta: {args.max_delta_per_min}/min)", flush=True)
+          f"(anomalies: {args.anomaly_percent}% @ ±{args.anomaly_magnitude}, "
+          f"diurnal: ±{args.diurnal_amplitude}°C, "
+          f"max walk delta: {args.max_delta_per_min}/min)", flush=True)
 
     # Split row budget across sensors. Any remainder goes to the first sensors
     # so total stays exactly --rows.
@@ -245,7 +374,7 @@ def main():
                     for sid, value, unit, recorded_at in generate_series(
                         sensor_id, count, span_seconds, now,
                         anomaly_indices, args.anomaly_magnitude,
-                        args.max_delta_per_min,
+                        args.max_delta_per_min, ambient_offset,
                     ):
                         if recorded_at < archive_cutoff:
                             archived_at = recorded_at + timedelta(days=ARCHIVE_THRESHOLD_DAYS)
