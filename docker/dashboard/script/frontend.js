@@ -93,8 +93,11 @@ async function initApp() {
   }
 
   // Login worked, hide the spinner, show the app.
-  dom.loading.style.display = "none";
-  dom.app.style.display     = "block";
+  // classList.add("d-none") instead of style.display = "none" because the
+  // loader has Bootstrap's d-flex class, whose `display: flex !important`
+  // beats an inline `display: none` set without !important.
+  dom.loading.classList.add("d-none");
+  dom.app.style.display = "block";
 
   setupUI();
   initChart();
@@ -456,11 +459,11 @@ function updateStatusBadge(count, isLive) {
 
 function showError(message) {
   dom.errorText.textContent = message;
-  dom.errorBox.style.display = "flex";
+  dom.errorBox.classList.remove("d-none");
 }
 
 function hideError() {
-  dom.errorBox.style.display = "none";
+  dom.errorBox.classList.add("d-none");
 }
 
 function showFatalError(message) {
