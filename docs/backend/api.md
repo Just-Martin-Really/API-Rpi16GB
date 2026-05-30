@@ -266,7 +266,7 @@ The body for both is `{"error":"forbidden"}` (or `{"error":"missing authorizatio
 
 | Method | Path | Required audience | Required role | DB pool |
 |---|---|---|---|---|
-| GET  | `/api/v1/sensor-data`            | `dashboard-client`  | `dashboard-user`    | `iot_read_user`  |
+| GET  | `/api/v1/sensor-data`            | `dashboard-client` **or** `lstm-client` | `dashboard-user` **or** `lstm-control` | `iot_read_user`  |
 | POST | `/api/v1/sensor-data`            | `controller-client` | `controller-ingest` | `iot_write_user` |
 | POST | `/api/v1/actuator-command`       | `lstm-client`       | `lstm-control`      | `iot_write_user` |
 | GET  | `/api/v1/actuator-commands`      | `controller-client` | `controller-ingest` | `iot_write_user` |
@@ -276,6 +276,8 @@ The body for both is `{"error":"forbidden"}` (or `{"error":"missing authorizatio
 | POST | `/api/v1/sensor-requests/sent`   | `controller-client` | `controller-ingest` | `iot_write_user` |
 
 The backend matches the audience against the token's `aud` claim if it is a string or array, falling back to `azp` (Keycloak's authorized-party claim, which always carries the client_id). The realm role is read from `realm_access.roles`.
+
+`GET /api/v1/sensor-data` is the one route with two accepted policies: the dashboard reads the same series the LSTM control loop feeds its model with, so a token signed for either `dashboard-client` + `dashboard-user` or `lstm-client` + `lstm-control` is admitted. The router walks the policy list and accepts the first match; every other route keeps a single (audience, role) pair.
 
 ---
 

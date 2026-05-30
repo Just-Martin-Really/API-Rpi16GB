@@ -147,8 +147,8 @@ keycloak-db:
 |---|---|---|
 | `command` | `start-dev` | `start-dev --import-realm` |
 | `KC_DB_URL` | `jdbc:postgresql://postgres:5432/keycloak` | `jdbc:postgresql://keycloak-db:5432/keycloak` |
-| `KC_DB_PASSWORD` | hardcoded `changeme_db_password` | — (entfernt) |
-| `KC_DB_PASSWORD_FILE` | — | `/run/secrets/keycloak_db_password` |
+| `KC_DB_PASSWORD` | hardcoded `changeme_db_password` | per Entrypoint-Shellwrap: `export KC_DB_PASSWORD=$(cat /run/secrets/keycloak_db_password)` vor `kc.sh start-dev` |
+| `KC_DB_PASSWORD_FILE` | — | nicht verwendet (Keycloak 26 ignoriert die `_FILE`-Konvention für DB-Credentials, daher der Shellwrap oben) |
 | `KC_HOSTNAME` | — | `https://www.lab.local` |
 | `KC_HTTP_RELATIVE_PATH` | — | `/auth` |
 | `KC_HOSTNAME_STRICT` | — | `"false"` |
@@ -264,7 +264,7 @@ Alle Dateien liegen in `docker/secrets/` und sind per `.gitignore` ausgeschlosse
 
 | Datei | Verwendet von | Inhalt |
 |---|---|---|
-| `keycloak_db_password.txt` | `keycloak-db` (Postgres-Passwort), `keycloak` (KC_DB_PASSWORD_FILE) | DB-Passwort |
+| `keycloak_db_password.txt` | `keycloak-db` (`POSTGRES_PASSWORD_FILE`), `keycloak` (Shellwrap exportiert `KC_DB_PASSWORD` aus dieser Datei vor dem Start) | DB-Passwort |
 | `keycloak_controller_secret.txt` | zukünftig: `controller`-Service | muss mit `secret` in `iot-realm.json` → `controller-client` übereinstimmen |
 | `keycloak_lstm_secret.txt` | zukünftig: `lstm`-Service | muss mit `secret` in `iot-realm.json` → `lstm-client` übereinstimmen |
 

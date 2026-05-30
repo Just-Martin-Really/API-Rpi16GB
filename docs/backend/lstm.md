@@ -192,8 +192,19 @@ One iteration of the loop:
    - else if `max(forecast[:LOOKAHEAD]) > TARGET_HIGH`, the cooler turns on and the heater turns off;
    - otherwise both off.
 4. Diff against the last sent state. Only changes are emitted; the queue is not spammed with identical commands.
-5. For each changed (role, command), POST `/api/v1/actuator-command` with `issued_by='machine'`.
+5. For each changed (role, command), translate the internal `(role, "on"|"off")` pair to the wire command the Pico firmware speaks, then POST `/api/v1/actuator-command` with `issued_by='machine'`.
 6. Sleep `LOOP_SECONDS` and loop.
+
+The translation lives in `ROLE_COMMAND_TO_WIRE` in `control_loop.py`:
+
+| Internal `(role, state)` | Wire command sent to the backend |
+|---|---|
+| `("heater", "on")`  | `HEAT_ON`  |
+| `("heater", "off")` | `HEAT_OFF` |
+| `("cooler", "on")`  | `FAN_ON`   |
+| `("cooler", "off")` | `FAN_OFF`  |
+
+The Pico subscribes to a single actuator topic and switches on the command string, so off/on are spelled out as explicit `HEAT`/`FAN` verbs on the wire; the loop only carries the abstract `(role, state)` pair internally. Backend, controller and Pico all agree on these four strings: anything else is rejected by the schema check on `actuator_commands.command`.
 
 ### Run
 
