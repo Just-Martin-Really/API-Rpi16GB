@@ -283,13 +283,35 @@ Aktueller Stand der hardcoded Secrets (`docker/keycloak/iot-realm.json`):
 
 ---
 
-## Audience-Claim — Abweichung von Chap6
+## Abweichungen von Chap6
+
+Bewusste Abweichungen vom Skript-Stand aus Chap6. Jede Abweichung ist begründet und dokumentiert, damit Prüfer sie nicht als Regression interpretieren.
+
+### Audience-Claim (Client-ID statt Ressourcenname)
 
 Chap6, Folie 6-14, zeigt im Beispiel-Token einen `aud`-Claim mit dem Wert `"sensor-data"`, also dem **Ressourcennamen**. Unsere Implementierung verwendet stattdessen den **Client-Namen** als Audience: das Backend prüft `aud == "dashboard-client"` (bzw. `"controller-client"`, `"lstm-client"`), nicht `aud == "sensor-data"`.
 
 Hintergrund: Keycloak 26 stellt im `aud`-Claim per Default den Client ein, der das Token angefordert hat (über `azp` als Fallback). Den Ressourcennamen als Audience auszustellen würde einen zusätzlichen Audience-Mapper pro Client im Realm-JSON voraussetzen, ohne im Mehrclient-Setup (Dashboard, Controller, LSTM gegen dasselbe Backend) zusätzliche Aussagekraft zu liefern: die Rollenprüfung (`dashboard-user`, `controller-ingest`, `lstm-control`) leistet die feingranulare Autorisierung schon.
 
 Folge für Prüfer: Chap6-konform ist die Variante „Audience = Ressourcenname"; unsere Variante „Audience = Client-ID" ist eine bewusste Vereinfachung, die im Backend in `src/auth.zig` an einer Stelle implementiert ist und in der Routen-Policy-Tabelle in [`docs/backend/api.md`](api.md) dokumentiert wird.
+
+### DB-Benutzernamen (`iot_*` statt `db_*`)
+
+Chap6, Folie 6-24, benennt die Postgres-Rollen `db_read_user` und `db_write_user`. Unser Schema verwendet stattdessen `iot_read_user` und `iot_write_user`. Funktional identisch: jeweils eine Lese- und eine Schreibrolle mit denselben Tabellengrants und denselben Zuordnungen zum Zig-Backend-Connection-Pool (`PG_USER_READ`, `PG_USER_WRITE`).
+
+Hintergrund: die Namen sind im gesamten Stack konsistent vergeben (Schema-Init in `docker/postgres/init.sql` und `migrate.sql`, Grants in derselben Datei, Connection-Strings in `src/main.zig:29-30`, Pool-Wahl pro Route in `src/router.zig`). Ein Rename gegen Ende der Integrationsphase wäre ein vielzeiliger Diff, der jede dieser Stellen treffen müsste, ohne semantischen Mehrwert. Wir dokumentieren die Abweichung statt sie nachträglich rückzubauen.
+
+Anmerkung zur Konvention: die **Passwort-Dateien** im Compose-Secret-Block heißen weiterhin `db_read_password.txt` und `db_write_password.txt` (gemounted nach `/run/secrets/db_read_password` bzw. `/run/secrets/db_write_password`). Nur die SQL-Rollennamen weichen ab; die Datei-Konvention spiegelt Chap6.
+
+Folge für Prüfer: Wenn das Skript `db_read_user`/`db_write_user` erwartet, im Realm-Import und in `init.sql` nach `iot_read_user`/`iot_write_user` suchen; die Pool-Auswahl pro Route ist in der Routen-Policy-Tabelle in [`docs/backend/api.md`](api.md) sichtbar.
+
+### `admin-user`-Rolle (definiert, ungenutzt)
+
+Die Realm-Datei `docker/keycloak/iot-realm.json` enthält eine Realm-Rolle `admin-user`. Diese Rolle ist im Chap6-Material nicht beschrieben und wird **derzeit nicht verwendet**: keinem Benutzer zugewiesen, kein Routen-Policy-Check im Backend, keine Erwähnung in `api.md`.
+
+Hintergrund: die Rolle ist als Erweiterungspunkt für eine spätere Admin-Oberfläche (z. B. eine geschützte `/api/v1/admin/*`-Route oder ein Grafana-Editor-Account) angelegt. Der Aufwand für eine sinnvolle Verwendung im Chap6-Scope (Rolle zuweisen + Route schützen + Bedienoberfläche) übersteigt den Bewertungsbeitrag, daher belassen wir die Rolle als deklaratives Scaffolding ohne aktive Verwendung.
+
+Folge für Prüfer: das Vorhandensein der Rolle ist beabsichtigt; sie wird in einer Folge-Phase aktiviert und ist nicht Bestandteil der Chap6-Pflichtfunktionalität.
 
 ---
 
