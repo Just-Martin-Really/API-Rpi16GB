@@ -79,7 +79,7 @@ services:
       # values today, but pinning them here means a future KC_HOSTNAME or
       # KC_HTTP_RELATIVE_PATH change can't silently desync the verifier.
       KEYCLOAK_JWKS_URL: http://keycloak:8080/auth/realms/iot/protocol/openid-connect/certs
-      KEYCLOAK_ISSUER: https://www.lab.local/realms/iot
+      KEYCLOAK_ISSUER: https://www.lab.local/auth/realms/iot
     secrets:
       - db_write_password
       - db_read_password
