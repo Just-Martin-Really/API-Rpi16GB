@@ -435,7 +435,7 @@ services:
       KC_DB_USERNAME: keycloak
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
-      KC_HOSTNAME: https://www.lab.local
+      KC_HOSTNAME: https://www.lab.local/auth
       KC_HTTP_RELATIVE_PATH: /auth
       KC_HOSTNAME_STRICT: "false"
       KC_PROXY_HEADERS: xforwarded
