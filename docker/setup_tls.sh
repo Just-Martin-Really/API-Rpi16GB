@@ -22,6 +22,12 @@ MQTT_DIR="./mosquitto/ssl"
 # instead of 0644 (which used to be world-readable on the Pi).
 MQTT_UID=1883
 
+# owasp/modsecurity-crs:nginx-alpine runs nginx as the unprivileged
+# alpine "nginx" user (UID 101) end-to-end, not as root with a drop.
+# The bind-mounted backend.key must be readable by that UID, so we
+# chown to 101 on the host and keep 0600 instead of widening to 0644.
+NGINX_UID=101
+
 FORCE_NEW_CA=0
 if [[ "${1:-}" == "--force-new-ca" ]]; then
     FORCE_NEW_CA=1
@@ -65,7 +71,7 @@ openssl req -new \
     -out "$NGINX_DIR/backend.csr"
 NGINX_EXT=$(mktemp)
 trap 'rm -f "$NGINX_EXT"' EXIT
-printf "subjectAltName=DNS:%s,DNS:localhost,DNS:nginx,IP:192.168.50.30" "$DOMAIN" > "$NGINX_EXT"
+printf "subjectAltName=DNS:%s,DNS:localhost,DNS:nginx,IP:192.168.50.92" "$DOMAIN" > "$NGINX_EXT"
 openssl x509 -req -in "$NGINX_DIR/backend.csr" \
     -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
     -out "$NGINX_DIR/backend.crt" \
@@ -95,15 +101,17 @@ cp "$CA_DIR/ca.crt" "$MQTT_DIR/ca.crt"
 
 # Permissions:
 # - Certificates (.crt) are public material → 0644.
-# - Private keys (.key) → 0600. The nginx master process starts as root
-#   inside the container and reads its key before dropping privileges, so
-#   leaving it root-owned with 0600 is enough.
+# - Private keys (.key) → 0600.
 # - The mosquitto broker process runs as UID 1883 inside the container,
 #   so the bind-mounted broker.key needs that ownership; otherwise the
 #   broker fails to read it and the listener silently never comes up.
+# - nginx in the owasp/modsecurity-crs:nginx-alpine image runs as the
+#   unprivileged "nginx" user (UID 101) from start to finish, so the
+#   backend.key has to be chown'd to that UID for the same reason.
 chmod 644 "$MQTT_DIR/broker.crt" "$MQTT_DIR/ca.crt" "$NGINX_DIR/backend.crt"
 chmod 600 "$MQTT_DIR/broker.key" "$NGINX_DIR/backend.key" "$CA_DIR/ca.key"
 chown "$MQTT_UID:$MQTT_UID" "$MQTT_DIR/broker.key" "$MQTT_DIR/broker.crt" "$MQTT_DIR/ca.crt"
+chown "$NGINX_UID:$NGINX_UID" "$NGINX_DIR/backend.key" "$NGINX_DIR/backend.crt"
 
 echo "==> Copying CA cert to Docker secrets dir"
 mkdir -p ./secrets
