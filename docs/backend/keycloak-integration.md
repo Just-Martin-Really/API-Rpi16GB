@@ -279,7 +279,34 @@ Aktueller Stand der hardcoded Secrets (`docker/keycloak/iot-realm.json`):
 | `controller-client` | `sc_controller_client` | `sc_controller_client` |
 | `lstm-client` | `sc_lstm_client` | `sc_lstm_client` |
 
-> Diese Werte sind absichtlich keine Zufallsstrings — die Entscheidung gegen einen Vault/Entrypoint-Injection-Mechanismus ist in [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md) dokumentiert. Vor dem Produktiveinsatz unbedingt rotieren.
+> Diese Werte sind absichtlich keine Zufallsstrings, die Entscheidung gegen einen Vault/Entrypoint-Injection-Mechanismus ist in [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md) dokumentiert. Vor dem Produktiveinsatz unbedingt rotieren.
+
+---
+
+## Audience-Claim — Abweichung von Chap6
+
+Chap6, Folie 6-14, zeigt im Beispiel-Token einen `aud`-Claim mit dem Wert `"sensor-data"`, also dem **Ressourcennamen**. Unsere Implementierung verwendet stattdessen den **Client-Namen** als Audience: das Backend prüft `aud == "dashboard-client"` (bzw. `"controller-client"`, `"lstm-client"`), nicht `aud == "sensor-data"`.
+
+Hintergrund: Keycloak 26 stellt im `aud`-Claim per Default den Client ein, der das Token angefordert hat (über `azp` als Fallback). Den Ressourcennamen als Audience auszustellen würde einen zusätzlichen Audience-Mapper pro Client im Realm-JSON voraussetzen, ohne im Mehrclient-Setup (Dashboard, Controller, LSTM gegen dasselbe Backend) zusätzliche Aussagekraft zu liefern: die Rollenprüfung (`dashboard-user`, `controller-ingest`, `lstm-control`) leistet die feingranulare Autorisierung schon.
+
+Folge für Prüfer: Chap6-konform ist die Variante „Audience = Ressourcenname"; unsere Variante „Audience = Client-ID" ist eine bewusste Vereinfachung, die im Backend in `src/auth.zig` an einer Stelle implementiert ist und in der Routen-Policy-Tabelle in [`docs/backend/api.md`](api.md) dokumentiert wird.
+
+---
+
+## Bonus / Erweiterungen
+
+Diese Punkte sind **nicht Bestandteil von Chap6**, sondern entstehen aus dem Projektaufbau und sind dem ClickUp-Bonus-Ticket `869dd2php` zugeordnet.
+
+### LSTM-Service als Keycloak-Client
+
+Der LSTM-Service wird in Chap6 nicht behandelt. Wir authentifizieren ihn über denselben Client-Credentials-Flow wie den Controller:
+
+- Realm-Client `lstm-client` (Service-Accounts aktiv) mit Realm-Rolle `lstm-control`.
+- Backend-Policy `POST /api/v1/actuator-command` verlangt `aud=lstm-client` und `realm_access.roles ∋ lstm-control` (siehe [`docs/backend/api.md`](api.md)).
+- Die Route `GET /api/v1/sensor-data` akzeptiert zusätzlich Tokens mit `aud=lstm-client` + `lstm-control`, weil der Forecast-Loop dieselbe Zeitreihe liest, die das Dashboard anzeigt; das ist die einzige Multi-Policy-Route im Backend.
+- Token-URL und CA-Cert kommen über Compose-Secrets in den `lstm`-Container; der vollständige Auth-Pfad ist in [`docs/backend/lstm.md`](lstm.md) §„Keycloak"-Abschnitt dokumentiert.
+
+Effekt: das LSTM erbt automatisch die TLS-, ModSec- und Rate-Limit-Schicht, ohne dass ein eigener Auth-Mechanismus erfunden werden musste. Die Bewertung in Chap6 bleibt davon unberührt: das Pflicht-Setup (`dashboard-client`, `controller-client`, `iotuser01`) ist eigenständig prüfbar.
 
 ---
 
@@ -371,6 +398,6 @@ docker compose up -d   ← keycloak-db legt DB an, Keycloak importiert Realm
 
 - [ ] `keycloak_db_password.txt` und `keycloak_admin_password.txt` mit starken Zufallspasswörtern befüllen (siehe `docs/backend/setup.md` § 1.8)
 - [ ] `keycloak_controller_secret.txt` und `keycloak_lstm_secret.txt` rotieren und in `iot-realm.json` synchron halten (Wert in beiden Stellen identisch)
-- [ ] Ende-zu-Ende-Test mit aktiviertem nginx-TLS-Proxy: Browser-Login, Controller-Token, LSTM-Token (siehe Testmatrix in `INTEGRATION-TODOS.md` auf `integration/phase-6`)
+- [ ] Ende-zu-Ende-Test mit aktiviertem nginx-TLS-Proxy: Browser-Login, Controller-Token, LSTM-Token (vollständige Testmatrix in [`end-to-end-tests.md`](end-to-end-tests.md))
 - [ ] `command: start-dev` auf `command: start` umstellen, sobald `KC_HOSTNAME`/`KC_PROXY_HEADERS` produktiv getestet sind
 - [ ] Passwort für `iotuser01` (`Test1234!`) ändern oder den Account deaktivieren
