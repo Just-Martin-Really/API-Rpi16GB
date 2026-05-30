@@ -35,19 +35,22 @@ Usage (from the docker/ directory on the Pi):
   docker compose --profile tools run --rm seeder [options]
 
 Examples:
-  # 10 000 rows over the last 30 days, default sensors
+  # 10 000 rows per sensor over the last 30 days (default sensors → 20k total)
   docker compose --profile tools run --rm seeder
+
+  # one-row-per-minute over 7 days for the default sensors
+  docker compose --profile tools run --rm seeder --rows 10080 --days 7
 
   # large dataset spanning over 3 years to test the archive purge
   docker compose --profile tools run --rm seeder --rows 200000 --days 1100
 
-  # custom sensors
+  # custom sensors, 50k rows each
   docker compose --profile tools run --rm seeder \\
       --sensors demo-temp-01,demo-temp-02,demo-humid-01 \\
       --rows 50000
 
 CLI options:
-  --rows N                 total rows to insert                       (default 10000)
+  --rows N                 rows per sensor (total inserts = rows * sensors) (default 10000)
   --days N                 timestamp spread in days                   (default 30)
   --sensors a,b,c          comma-separated sensor IDs                 (default demo-temp-01,demo-humid-01)
   --max-delta-per-min F    cap on per-minute change for the per-sensor
@@ -205,10 +208,14 @@ def generate_series(sensor_id, count, span_seconds, now,
         timestamps = [now - timedelta(seconds=span_seconds / 2)]
     else:
         step = span_seconds / (count - 1)
+        # Small jitter so multiple sensors don't land on identical recorded_at
+        # values, but tight enough that the cadence still reads as regular to
+        # the LSTM (jitter ≤ step/4, capped at 2 s for the typical 60 s grid).
+        jitter = min(2.0, step / 4)
         timestamps = [
             now - timedelta(seconds=max(
                 0.0,
-                span_seconds - i * step + random.uniform(-step / 4, step / 4),
+                span_seconds - i * step + random.uniform(-jitter, jitter),
             ))
             for i in range(count)
         ]
@@ -241,7 +248,8 @@ def generate_series(sensor_id, count, span_seconds, now,
 
 def main():
     parser = argparse.ArgumentParser(description="Seed fake sensor data.")
-    parser.add_argument("--rows", type=int, default=10000)
+    parser.add_argument("--rows", type=int, default=10000,
+                        help="rows per sensor (total inserts = rows * sensors)")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--sensors", type=str, default="demo-temp-01,demo-humid-01")
     parser.add_argument("--max-delta-per-min", type=float, default=0.25,
@@ -255,22 +263,23 @@ def main():
     if not sensors:
         parser.error("--sensors must contain at least one ID")
 
-    now = datetime.now(timezone.utc)
+    # Snap the anchor to the minute so recorded_at values look "tidy"
+    # (e.g. 21:34:00, 21:33:00 ±jitter) instead of inheriting the fractional
+    # second from wall-clock now().
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     archive_cutoff = now - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
     span_seconds = args.days * 24 * 3600
 
     ambient_offset = build_ambient_offset(span_seconds, now, args.diurnal_amplitude)
 
-    print(f"generating {args.rows} rows across {args.days} days "
+    total = args.rows * len(sensors)
+    print(f"generating {args.rows} rows per sensor ({total} total) "
+          f"across {args.days} days "
           f"for sensors: {', '.join(sensors)} "
           f"(diurnal: ±{args.diurnal_amplitude}°C, "
           f"max walk delta: {args.max_delta_per_min}/min)", flush=True)
 
-    # Split row budget across sensors. Any remainder goes to the first sensors
-    # so total stays exactly --rows.
-    per_sensor = [args.rows // len(sensors)] * len(sensors)
-    for i in range(args.rows % len(sensors)):
-        per_sensor[i] += 1
+    per_sensor = [args.rows] * len(sensors)
 
     active_buf = []
     archive_buf = []
