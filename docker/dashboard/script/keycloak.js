@@ -1,3 +1,7 @@
+// vendored from keycloak-js@26.2.4 — refresh via npm if upgrading the server.
+// Source: https://www.npmjs.com/package/keycloak-js
+// Vendored because Keycloak 26 dropped the legacy /auth/js/keycloak.js
+// endpoint the dashboard used to load this from at runtime.
 // @ts-check
 /**
  * @import {Acr, KeycloakAccountOptions, KeycloakAdapter, KeycloakConfig, KeycloakError, KeycloakFlow, KeycloakInitOptions, KeycloakLoginOptions, KeycloakLogoutOptions, KeycloakPkceMethod, KeycloakProfile, KeycloakRegisterOptions, KeycloakResourceAccess, KeycloakResponseMode, KeycloakResponseType, KeycloakRoles, KeycloakTokenParsed, OpenIdProviderMetadata} from "./keycloak.ts"
