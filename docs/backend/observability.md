@@ -13,9 +13,14 @@ how it is wired, and how to verify it works.
 | `postgres_exporter` | `quay.io/prometheuscommunity/postgres-exporter:v0.15.0` | `app-net`           | 9187  | sensor-DB connections, transactions, sizes    |
 | Zig backend       | (in-tree)                                            | `app-net`              | 8080  | `/metrics` route, hand-rolled exposition      |
 | LSTM control loop | (in-tree)                                            | `app-net`              | 8000  | `prometheus_client.start_http_server`         |
+| `controller`      | (in-tree)                                            | `app-net`              | 8000  | actuator-command dispatcher metrics           |
 
 Prometheus listens on `:9090` inside `app-net` only. There is no host-port
-mapping; access goes through Grafana once that lands.
+mapping. Prometheus is accessible externally at
+`https://www.lab.local/prometheus/` through the nginx reverse proxy. The
+container is started with `--web.external-url=https://www.lab.local/prometheus/`
+and `--web.route-prefix=/prometheus/`, which shifts all routes — including
+`/api/v1/` and `/metrics` — under the `/prometheus/` prefix.
 
 ## Scrape topology
 
@@ -107,9 +112,11 @@ port.
 
 ### Postgres exporter (`postgres_exporter:9187`)
 
-Connects as `postgres_exporter_user`, a read-only role created in
-`docker/postgres/init.sql` with the canonical `pg_monitor` grant. That role
-gives access to the `pg_stat_*` views without exposing row data.
+Connects as `postgres_exporter_user`, a read-only monitoring role with the
+canonical `pg_monitor` grant. This role is **not** created by `init.sql` and
+must be bootstrapped manually before the exporter will connect — see
+[Bootstrap](#bootstrap). The `pg_monitor` grant gives access to the
+`pg_stat_*` views without exposing row data.
 
 Notable metrics out of the box:
 
@@ -155,27 +162,37 @@ Useful metrics for Pi monitoring:
 ## Bootstrap
 
 Prometheus brings up cleanly with `docker compose up -d prometheus
-node_exporter postgres_exporter`. The only manual step is the exporter's
-password.
+node_exporter postgres_exporter`. Two manual steps are required: generating
+the exporter password secret and creating the Postgres monitoring role.
+
+**Step 1 — generate the password secret:**
 
 ```sh
 echo "$(openssl rand -base64 32)" > docker/secrets/db_exporter_password.txt
 ```
 
 That file is mounted into `postgres_exporter` as
-`/run/secrets/db_exporter_password`, and the exporter reads it via
-`DATA_SOURCE_PASS_FILE`. The same value is then applied to the Postgres role
-by `docker/set_passwords.sh`, which now contains:
+`/run/secrets/db_exporter_password` and read via `DATA_SOURCE_PASS_FILE`.
+
+**Step 2 — create the monitoring role** (`postgres_exporter_user` is not
+created by `init.sql`; this must be run once per environment):
 
 ```sh
-EXPORTER_PW=$(cat ./secrets/db_exporter_password.txt)
-...
+EXPORTER_PW=$(cat docker/secrets/db_exporter_password.txt)
+docker compose exec postgres psql -U postgres \
+  -c "CREATE USER postgres_exporter_user WITH PASSWORD '$EXPORTER_PW';"
+docker compose exec postgres psql -U postgres \
+  -c "GRANT pg_monitor TO postgres_exporter_user;"
 docker compose exec postgres psql -U postgres -d sensor \
-  -c "ALTER USER postgres_exporter_user WITH PASSWORD '$EXPORTER_PW';"
+  -c "GRANT CONNECT ON DATABASE sensor TO postgres_exporter_user;"
 ```
 
-Re-run `sh ./set_passwords.sh` on the Pi after pulling this branch. The
-exporter will report `pg_up 0` until that step finishes.
+`docker/set_passwords.sh` contains only an `ALTER USER … PASSWORD` line and
+cannot create the role. Run the three SQL commands above on first setup, then
+use `set_passwords.sh` for subsequent password rotations.
+
+The exporter will report `pg_up 0` until the role exists with the correct
+password.
 
 ## Verification
 
@@ -184,7 +201,7 @@ All commands run from `docker/` on the Pi.
 ### Prometheus targets are up
 
 ```sh
-docker compose exec prometheus wget -qO- http://localhost:9090/api/v1/targets | jq '.data.activeTargets[] | {job:.labels.job, health:.health}'
+docker compose exec prometheus wget -qO- http://localhost:9090/prometheus/api/v1/targets | jq '.data.activeTargets[] | {job:.labels.job, health:.health}'
 ```
 
 Every entry should show `"health": "up"` once the services have been running
@@ -241,6 +258,31 @@ host network namespace.
 
 - **Alerts.** Optional per the Phase 6 spec. Will live in
   `docker/prometheus/alert.rules.yml` alongside `prometheus.yml` when added.
+
+## Configuration reload
+
+### Prometheus
+
+Reload the scrape configuration without restarting the container by sending
+SIGHUP to PID 1 inside the container:
+
+```sh
+docker compose exec prometheus kill -HUP 1
+```
+
+Prometheus logs `"Completed loading of configuration file"` on success. The
+TSDB is not restarted; only the scrape config and rule files are re-read.
+
+### nginx
+
+nginx templates (`docker/nginx/templates/conf.d/*.conf.template`) are rendered
+into the running config only when the container starts. A plain `restart` is
+not sufficient after a template change — the container must be force-recreated
+so that environment-variable substitution runs again:
+
+```sh
+docker compose up -d --force-recreate --no-deps nginx
+```
 
 ## Design notes
 

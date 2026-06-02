@@ -8,6 +8,9 @@ Browser-based dashboard for the IoT sensor system. Static files (HTML, CSS, JS, 
 |---|---|
 | `docker/dashboard/` directory | done |
 | `index.html` — login state, logout button, chart, time picker | done |
+| KPI cards (temperature, humidity, system status, monitoring quick-links) | done |
+| Readings table — last 10 sensor rows, newest first | done |
+| Footer — lab name, Grafana and Prometheus links, copyright | done |
 | `favicon.svg` (+ legacy `favicon.ico` reference) | done |
 | `style/style.css` | done |
 | `script/frontend.js` — Keycloak init, login flow, fetch, chart, live mode, 401/403 handling | done |
@@ -51,6 +54,25 @@ docker/dashboard/
 
 All constants are at the top of `frontend.js` and can be changed without touching any logic.
 
+## Layout
+
+The page is divided into three visual rows:
+
+1. **KPI row** — four cards across the top:
+   - Temperature (latest value, °C)
+   - Humidity (latest value, %)
+   - System status (Online / Offline badge + timestamp)
+   - Monitoring quick-links (Grafana and Prometheus buttons)
+
+2. **Filter + chart row** — date-range controls on the left, Chart.js
+   time-series chart on the right with an animated LIVE badge when live mode
+   is active.
+
+3. **Readings table** — last 10 sensor rows newest-first, with a row-count
+   badge in the header.
+
+A footer at the bottom links to Grafana and Prometheus.
+
 ## DOM element IDs (index.html ↔ frontend.js contract)
 
 | ID | Element | Used for |
@@ -66,6 +88,13 @@ All constants are at the top of `frontend.js` and can be changed without touchin
 | `error-message` | error div | Container for API / auth error messages |
 | `error-text` | `<span>` inside above | The human-readable error string |
 | `iotChart` | `<canvas>` | Chart.js render target |
+| `kpi-temp` | `<span>` | Latest temperature value (KPI card) |
+| `kpi-hum` | `<span>` | Latest humidity value (KPI card) |
+| `status-text` | `<div>` | System status description (KPI status card) |
+| `status-time` | `<div>` | Timestamp of last status update |
+| `status-badge` | `<span>` | Online / Offline pill badge |
+| `readings-tbody` | `<tbody>` | Last 10 readings table body |
+| `table-count` | `<span>` | Row count badge next to the table header |
 
 ## Authentication flow
 
