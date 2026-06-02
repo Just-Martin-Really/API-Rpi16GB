@@ -6,6 +6,9 @@ networks:
 
 volumes:
   postgres_data:
+  keycloak_db_data:
+  prometheus_data:
+  grafana_data:
 
 secrets:
   db_password:
@@ -14,24 +17,34 @@ secrets:
     file: ./secrets/db_write_password.txt
   db_read_password:
     file: ./secrets/db_read_password.txt
-  jwt_secret:
-    file: ./secrets/jwt_secret.txt
   mqtt_controller_user:
     file: ./secrets/mqtt_controller_user.txt
   mqtt_controller_password:
     file: ./secrets/mqtt_controller_password.txt
   ca_cert:
     file: ./secrets/ca_cert.txt
-  api_key:
-    file: ./secrets/api_key.txt
-  dashboard_lstm_password:
-    file: ./secrets/dashboard_lstm_password.txt
+  keycloak_db_password:
+    file: ./secrets/keycloak_db_password.txt
+  keycloak_admin_password:
+    file: ./secrets/keycloak_admin_password.txt
+  keycloak_lstm_secret:
+    file: ./secrets/keycloak_lstm_secret.txt
+  db_exporter_password:
+    file: ./secrets/db_exporter_password.txt
+  db_grafana_password:
+    file: ./secrets/db_grafana_password.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
+  grafana_oidc_client_secret:
+    file: ./secrets/grafana_oidc_client_secret.txt
+  keycloak_controller_secret:
+    file: ./secrets/keycloak_controller_secret.txt
 
 services:
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
     restart: unless-stopped
     environment:
       POSTGRES_DB: sensor
@@ -44,6 +57,12 @@ services:
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sensor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     # Not exposed to the host — only reachable inside app-net
 
   # ── Zig backend ────────────────────────────────────────────────────────────
@@ -56,25 +75,36 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: sensor
+      # JWT verification config. Defaults in main.zig happen to match these
+      # values today, but pinning them here means a future KC_HOSTNAME or
+      # KC_HTTP_RELATIVE_PATH change can't silently desync the verifier.
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/auth/realms/iot/protocol/openid-connect/certs
+      KEYCLOAK_ISSUER: https://www.lab.local/auth/realms/iot
     secrets:
       - db_write_password
       - db_read_password
-      - jwt_secret
     networks:
       - app-net
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── nginx reverse proxy + ModSecurity WAF + OWASP CRS (Kap4 4.2) ─────────
   nginx:
-    image: owasp/modsecurity-crs:nginx-alpine
+    image: owasp/modsecurity-crs:nginx-alpine@sha256:88b59911549723e71beabf3b4aa47bbd31b00e79401f442e65ddfc430ae46343
     restart: unless-stopped
     ports:
       - "80:8080"
       - "443:8443"
     environment:
       # Network & TLS
-      SERVER_NAME: backend.lab.local
+      SERVER_NAME: www.lab.local
       PORT: "8080"
       SSL_PORT: "8443"
       BACKEND: "http://backend:8080"
@@ -104,33 +134,53 @@ services:
       # TLS cert + key are provisioned on the host by the CA setup step
       - /etc/ssl/backend/backend.crt:/etc/nginx/ssl/backend.crt:ro
       - /etc/ssl/backend/backend.key:/etc/nginx/ssl/backend.key:ro
+      # Dashboard static files served directly by nginx
+      - ./dashboard:/usr/share/nginx/dashboard:ro
     networks:
       app-net:
         aliases:
-          - backend.lab.local
+          - www.lab.local
     healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 15s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
 
   # ── MQTT broker ────────────────────────────────────────────────────────────
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2@sha256:a908c65cc8e67ec9d292ef27c2c0360dbaaee7eb1b935cdd194e67697f15dea1
     restart: unless-stopped
     ports:
       - "8883:8883"
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/acl:/mosquitto/config/acl:ro
+      # :rw is required during first-time bootstrap by set_passwords.sh,
+      # which writes the hashed passwd file into the container from host
+      # stdin. After bootstrap the broker process never writes here; the
+      # mount could be flipped to :ro at the cost of an extra recreate
+      # whenever passwords rotate.
       - ./mosquitto/passwd:/mosquitto/config/passwd:rw
       - ./mosquitto/ssl:/mosquitto/ssl:ro
     networks:
       - sensor-net
       - app-net
+    # Mosquitto has no HTTP /health endpoint; the closest in-image probe
+    # is a TCP check on the TLS listener. busybox `nc` returns nonzero
+    # while the process is starting or after a crash, so this is enough
+    # to gate dependents on broker-up rather than "container exists".
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8883"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   # ── Archiver (sensor_data → sensor_data_archive, daily) ───────────────────
   archiver:
@@ -146,7 +196,8 @@ services:
     networks:
       - app-net
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── Seeder (fake-data generator, on-demand only) ──────────────────────────
   # Not started by `docker compose up` — opt-in via the "tools" profile:
@@ -164,7 +215,8 @@ services:
     networks:
       - app-net
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   # ── Controller (MQTT → DB bridge) ─────────────────────────────────────────
   controller:
@@ -175,12 +227,15 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "8883"
-      API_BASE_URL: https://nginx:8443
+      API_BASE_URL: https://www.lab.local:8443
+      KEYCLOAK_TOKEN_URL: https://www.lab.local:8443/auth/realms/iot/protocol/openid-connect/token
+      CONTROLLER_CLIENT_ID: controller-client
+      CONTROLLER_CLIENT_SECRET_FILE: /run/secrets/keycloak_controller_secret
     secrets:
       - mqtt_controller_user
       - mqtt_controller_password
       - ca_cert
-      - api_key
+      - keycloak_controller_secret
     networks:
       - app-net
       - sensor-net
@@ -188,26 +243,9 @@ services:
       nginx:
         condition: service_healthy
       mosquitto:
-        condition: service_started
-
-  # ── Webserver ─────────────────────────────────────────
-  webserver:
-    build:
-      context: ./webserver
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: sensor
-      DB_USER: iot_write_user
-    secrets:
-      - db_write_password
-      - api_key
-    networks:
-      - app-net
-    depends_on:
-      - postgres
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
 
   # ── LSTM control loop (predict + post heater/cooler commands) ─────────────
   lstm:
@@ -216,23 +254,208 @@ services:
       dockerfile: docker/lstm/Dockerfile
     restart: unless-stopped
     environment:
-      API_BASE_URL: https://backend.lab.local:8443
+      API_BASE_URL: https://www.lab.local:8443
       API_CA_CERT: /run/secrets/ca_cert
-      LSTM_USER: lstm
-      LSTM_PASS_FILE: /run/secrets/dashboard_lstm_password
+      KEYCLOAK_TOKEN_URL: https://www.lab.local:8443/auth/realms/iot/protocol/openid-connect/token
+      LSTM_CLIENT_ID: lstm-client
+      LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
       DATA_SOURCE: api
       API_DAYS: "7"
       TARGET_LOW: "19.0"
       TARGET_HIGH: "23.0"
       LOOKAHEAD: "30"
       LOOP_SECONDS: "60"
-      ACTUATOR_HEATER_ID: heater01
-      ACTUATOR_COOLER_ID: cooler01
+      ACTUATOR_HEATER_ID: actuator01
+      ACTUATOR_COOLER_ID: actuator01
     secrets:
       - ca_cert
-      - dashboard_lstm_password
+      - keycloak_lstm_secret
     networks:
       - app-net
     depends_on:
       nginx:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
+  # ── Prometheus (Metric scraping, internal only) ──────────────────────────────
+  # Scrape config in ./prometheus/prometheus.yml. Port 9090 deliberately not
+  # exposed to the host: Prometheus is reached via Grafana, which terminates
+  # auth. node_exporter runs on the host network namespace so it can report
+  # real CPU / RAM / disk / temperature from the Pi, not container values.
+  prometheus:
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app-net
+    # No depends_on by design: Prometheus needs to start even when the rest
+    # of the stack is broken — that is precisely when you want metrics. It
+    # retries scrapes on its own scrape_interval, so a target being down at
+    # startup is harmless.
+
+  # ── node_exporter (host-level CPU / RAM / disk / temperature) ───────────────
+  # Runs on the host network namespace so /proc, /sys and CPU temp report the
+  # Pi's real values rather than container-scoped ones. Scraped by Prometheus
+  # via host.docker.internal:9100 (see prometheus extra_hosts).
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:v1.8.2@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.hwmon
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+
+  # ── postgres_exporter (sensor-DB metrics) ────────────────────────────────────
+  # Connects as postgres_exporter_user (pg_monitor role) which is created in
+  # ./postgres/init.sql. Password comes from secrets/db_exporter_password.txt
+  # via the db_exporter_password secret.
+  postgres_exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0@sha256:386b12d19eab2a37d7cd8ca8b4c7491cc7a830d9581f49af6c98a393da9605e6
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/sensor?sslmode=disable"
+      DATA_SOURCE_USER: postgres_exporter_user
+      DATA_SOURCE_PASS_FILE: /run/secrets/db_exporter_password
+    secrets:
+      - db_exporter_password
+    networks:
+      - app-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Grafana (dashboards + OIDC) ──────────────────────────────────────────────
+  # Provisioned datasources + dashboards in ./grafana/provisioning/. Admin and
+  # OIDC client secrets come from file-based secrets so nothing sensitive
+  # lives in env vars or the compose file. Reached only through nginx at
+  # https://www.lab.local/grafana/; no host port published.
+  grafana:
+    image: grafana/grafana:11.3.0@sha256:a0f881232a6fb71a0554a47d0fe2203b6888fe77f4cefb7ea62bed7eb54e13c3
+    restart: unless-stopped
+    environment:
+      # Public URL Grafana generates absolute links and redirect URIs for.
+      # serve_from_sub_path=true makes Grafana itself respond at /grafana/...
+      # so nginx can preserve the prefix upstream.
+      GF_SERVER_ROOT_URL: "https://www.lab.local/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Admin credentials. _FILE suffix is Grafana's documented Docker
+      # convention for reading any GF_* setting from disk.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      # Disable anonymous access and sign-up (per ticket requirement).
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Keycloak OIDC.
+      #
+      # AUTH_URL is the URL the user's browser is redirected to, so it must
+      # be reachable from the LAN under the public hostname. TOKEN_URL and
+      # API_URL are server-to-server calls from Grafana, kept on the
+      # internal HTTP endpoint so we don't have to mount ca_cert into
+      # Grafana just for these.
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: Keycloak
+      GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: grafana-client
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE: /run/secrets/grafana_oidc_client_secret
+      GF_AUTH_GENERIC_OAUTH_SCOPES: "openid email profile"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "https://www.lab.local/auth/realms/iot/protocol/openid-connect/auth"
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/token"
+      GF_AUTH_GENERIC_OAUTH_API_URL: "http://keycloak:8080/auth/realms/iot/protocol/openid-connect/userinfo"
+      # Map Keycloak realm roles to Grafana roles. admin-user → full admin,
+      # dashboard-user → Viewer (read-only). Dashboards are provisioned from
+      # JSON under ./grafana/provisioning/, so end users should not need to
+      # edit live; Editor edits would also be lost on container restart.
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(realm_access.roles[*], 'admin-user') && 'GrafanaAdmin' || 'Viewer'"
+      GF_AUTH_GENERIC_OAUTH_ALLOW_ASSIGN_GRAFANA_ADMIN: "true"
+    secrets:
+      - grafana_admin_password
+      - grafana_oidc_client_secret
+      - db_grafana_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - app-net
+    depends_on:
+      prometheus:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  # ── Keycloak DB (dedizierte Postgres-Instanz für Keycloak) ───────────────────
+  keycloak-db:
+    image: postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    secrets:
+      - keycloak_db_password
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Keycloak Identity & Access Management ────────────────────────────────────
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1@sha256:be6a86215213145bfb4fb3e2b3ab982a806d00262655abdcf3ffa6a38d241c7c
+    container_name: keycloak_server
+    entrypoint: ["sh", "-c"]
+    command:
+      - 'export KC_DB_PASSWORD=$$(cat /run/secrets/keycloak_db_password) && exec /opt/keycloak/bin/kc.sh start-dev --import-realm'
+    restart: unless-stopped
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_admin_password
+      KC_HOSTNAME: https://www.lab.local/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME_STRICT: "false"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+    secrets:
+      - keycloak_db_password
+      - keycloak_admin_password
+    volumes:
+      - ./keycloak/iot-realm.json:/opt/keycloak/data/import/iot-realm.json:ro
+    # No host port: Keycloak is reached through nginx at /auth/. Publishing
+    # 8080 to the host bypasses ModSecurity, the subnet allowlist and the
+    # rate limit. Re-add as 127.0.0.1:8080:8080 if you need local debugging.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    networks:
+      - app-net

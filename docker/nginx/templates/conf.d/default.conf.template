@@ -2,13 +2,40 @@
 # Replaces the OWASP CRS image's default template. Variables in ${...}
 # are filled by envsubst at container start from the nginx service env.
 
-# Rate limit: 30 req/min per client IP (http-scope zone)
-limit_req_zone $binary_remote_addr zone=api:10m rate=30r/m;
+# Rate limit key. In-cluster Docker traffic (controller, lstm, archiver
+# polling GET endpoints every 2s) is exempt: the geo map below returns
+# an empty string for the Docker bridge range, and nginx skips
+# limit_req when the zone key is empty. The public rate stays at
+# 300 r/min while dev work still drives a lot of human-facing traffic;
+# the exempt-internal split is structural and lets us dial the public
+# value down later without affecting service-to-service polling.
+geo $rate_limit_key {
+    default        $binary_remote_addr;
+    172.16.0.0/12  "";
+}
+
+limit_req_zone $rate_limit_key zone=api:10m rate=300r/m;
 
 server {
     listen ${PORT} default_server;
     server_name ${SERVER_NAME};
-    return 301 https://$host$request_uri;
+
+    # Loopback healthcheck, kept on HTTP so the docker probe doesn't
+    # need to deal with the self-signed cert. The redirect below is in
+    # a location block so this exact-match location wins; a server-level
+    # return runs at the rewrite phase, before location matching.
+    location = /healthz {
+        allow 127.0.0.1;
+        deny  all;
+        modsecurity off;
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
 }
 
 server {
@@ -31,8 +58,17 @@ server {
         return 200 "ok\n";
     }
 
-    # Subnet allowlist: Production WLAN + internal Docker bridge networks.
+    # Subnet allowlist.
+    # - 192.168.50.0/24 → Production WLAN (clients reach the Pi through
+    #   the 2GB router AP). Required for normal operation.
+    # - 192.168.2.0/24  → direct-ethernet dev link Mac↔16GB Pi. DEV-ONLY:
+    #   drop this line if the deployment topology changes and the Pi
+    #   stops being reachable over a private wired link.
+    # - 172.16.0.0/12   → Docker's default bridge network range. Lets
+    #   in-cluster services (controller, lstm, dashboard) talk to nginx
+    #   through the compose network without tripping the ACL.
     allow 192.168.50.0/24;
+    allow 192.168.2.0/24;
     allow 172.16.0.0/12;
     deny  all;
 
@@ -41,24 +77,49 @@ server {
         proxy_set_header Host $host;
     }
 
+    # Keycloak Identity Provider — browser loads keycloak.js and performs
+    # the OIDC authorization code flow through this prefix.
     location /auth/ {
-        limit_req zone=api burst=5 nodelay;
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://keycloak:8080/auth/;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header Host              $host;
+        proxy_buffer_size          128k;
+        proxy_buffers              4 256k;
+        proxy_busy_buffers_size    256k;
+    }
+
+    # Grafana dashboards + OIDC. Prefix is preserved upstream because Grafana
+    # is configured with GF_SERVER_SERVE_FROM_SUB_PATH=true. proxy_http_version
+    # 1.1 + Upgrade/Connection headers are needed for Grafana Live's WebSocket.
+    location /grafana/ {
+        limit_req zone=api burst=20 nodelay;
+        proxy_pass http://grafana:3000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    location /api/v1/ {
+        limit_req zone=api burst=10 nodelay;
         proxy_pass http://backend:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 
-    location /api/internal/ {
-        limit_req zone=api burst=10 nodelay;
-        proxy_pass http://webserver:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    location /api/ {
-        limit_req zone=api burst=10 nodelay;
-        proxy_pass http://backend:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+    # Dashboard static files (index.html, CSS, JS, favicon).
+    # Served directly by nginx from a bind-mounted dashboard/ directory.
+    location / {
+        root   /usr/share/nginx/dashboard;
+        index  index.html;
+        try_files $uri $uri/ /index.html;
     }
 }

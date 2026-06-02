@@ -53,8 +53,81 @@ ALTER TABLE actuator_commands
     ADD CONSTRAINT chk_actuator_commands_issued_by
     CHECK (issued_by IN ('user', 'machine'));
 
--- Service account for the LSTM control loop. Password is 'changeme'; rotate via
--- set_passwords.sh before going live.
-INSERT INTO dashboard_users (username, password_sha256)
-VALUES ('lstm', encode(sha256('changeme'::bytea), 'hex'))
-ON CONFLICT (username) DO NOTHING;
+-- Phase 6: dashboard_users login table is replaced by Keycloak. Drop it on the
+-- live Pi after the new Zig backend (RS256 + JWKS verify) is deployed.
+DROP TABLE IF EXISTS dashboard_users;
+
+-- Phase 6 grant cleanup: iot_write_user historically had UPDATE on
+-- sensor_data, which no code path uses. Drop it; ingest stays at
+-- SELECT/INSERT plus the DELETE that was already added above for archive.
+REVOKE UPDATE ON TABLE sensor_data FROM iot_write_user;
+
+-- Phase 6 CHECK constraints: validate at the DB what only the app layer
+-- validated before. Drop-then-add so re-running migrate.sql is idempotent
+-- on a DB where these constraints already exist (e.g. fresh init.sql).
+-- Constraints mirror the regexes in controller.py and the unit list the
+-- Zig sensor handler accepts.
+
+ALTER TABLE sensor_data
+    DROP CONSTRAINT IF EXISTS chk_sensor_data_sensor_id;
+ALTER TABLE sensor_data
+    ADD CONSTRAINT chk_sensor_data_sensor_id
+    CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$');
+ALTER TABLE sensor_data
+    DROP CONSTRAINT IF EXISTS chk_sensor_data_unit;
+ALTER TABLE sensor_data
+    ADD CONSTRAINT chk_sensor_data_unit CHECK (unit IN ('C', '%'));
+
+ALTER TABLE sensor_data_archive
+    DROP CONSTRAINT IF EXISTS chk_sensor_data_archive_sensor_id;
+ALTER TABLE sensor_data_archive
+    ADD CONSTRAINT chk_sensor_data_archive_sensor_id
+    CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$');
+ALTER TABLE sensor_data_archive
+    DROP CONSTRAINT IF EXISTS chk_sensor_data_archive_unit;
+ALTER TABLE sensor_data_archive
+    ADD CONSTRAINT chk_sensor_data_archive_unit CHECK (unit IN ('C', '%'));
+
+ALTER TABLE actuator_commands
+    DROP CONSTRAINT IF EXISTS chk_actuator_commands_actuator_id;
+ALTER TABLE actuator_commands
+    ADD CONSTRAINT chk_actuator_commands_actuator_id
+    CHECK (actuator_id ~ '^[A-Za-z0-9_-]+$');
+ALTER TABLE actuator_commands
+    DROP CONSTRAINT IF EXISTS chk_actuator_commands_command;
+ALTER TABLE actuator_commands
+    ADD CONSTRAINT chk_actuator_commands_command
+    CHECK (command ~ '^[A-Z0-9_]+$');
+
+ALTER TABLE sensor_requests
+    DROP CONSTRAINT IF EXISTS chk_sensor_requests_sensor_id;
+ALTER TABLE sensor_requests
+    ADD CONSTRAINT chk_sensor_requests_sensor_id
+    CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$');
+ALTER TABLE sensor_requests
+    DROP CONSTRAINT IF EXISTS chk_sensor_requests_command;
+ALTER TABLE sensor_requests
+    ADD CONSTRAINT chk_sensor_requests_command
+    CHECK (command ~ '^[A-Z0-9_]+$');
+
+-- Phase 6: two new roles introduced in init.sql. Backfill them here so a Pi
+-- upgraded via migrate.sql ends up with the same user set as a fresh install.
+-- CREATE USER is not idempotent, hence the DO/EXCEPTION pattern.
+
+DO $$
+BEGIN
+    CREATE USER postgres_exporter_user;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+GRANT CONNECT ON DATABASE sensor TO postgres_exporter_user;
+GRANT pg_monitor TO postgres_exporter_user;
+
+DO $$
+BEGIN
+    CREATE USER grafana_read_user;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+GRANT CONNECT ON DATABASE sensor TO grafana_read_user;
+GRANT USAGE ON SCHEMA public TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data_archive TO grafana_read_user;

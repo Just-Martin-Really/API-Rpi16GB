@@ -41,7 +41,7 @@ This keeps database access centralized in the backend and prevents the MQTT/cont
 
 ### Fail-Secure Defaults
 - nginx returns 502 if the backend container is down — requests are never passed through to an unprotected fallback
-- JWT validation returns 401 on any failure (missing header, invalid signature, expired token) — there is no code path that allows a request through on error
+- Keycloak access-token validation returns 401 when no `Authorization` header is supplied and 403 when the signature, issuer, audience, expiry, or required realm role does not match. There is no code path that admits a request on a verification failure.
 - MQTT broker rejects the connection outright on failed authentication — no anonymous fallback
 - If a DB query fails during a request, the handler returns an error response — never partial or empty data silently treated as success
 
@@ -50,7 +50,7 @@ Security is enforced at multiple independent layers, so a failure or bypass of a
 1. nftables on the WLAN-AP — only Production WLAN traffic enters the network at all
 2. nginx subnet whitelist + rate limiting — further restricts which hosts can reach which paths
 3. ModSecurity WAF with OWASP Core Rule Set — every request is inspected at HTTP Layer 7 for SQLi, XSS, RCE, and path-traversal patterns before nginx hands off to the backend
-4. JWT validation on every `/api/` endpoint — authentication is re-checked per request, not per session
+4. Keycloak access-token validation on every `/api/v1/` endpoint, including a per-route audience and realm-role check — authentication is re-checked per request, not per session
 5. DB users with minimal rights — even full compromise of the backend process cannot DROP, ALTER, or access tables outside the granted scope
 6. Docker network isolation — sensor-side traffic has no route to postgres; sensor data reaches the database only through controller → nginx → backend
 7. MQTT ACL — a compromised sensor credential cannot read other sensors' data or write to actuator topics
@@ -65,15 +65,15 @@ Security is enforced at multiple independent layers, so a failure or bypass of a
 ### Complete Mediation
 - nginx checks every inbound request before it reaches the backend.
 - The firewall (nftables on WLAN-AP) checks every packet entering the network.
-- JWT validation is performed for every authenticated HTTP request.
+- Keycloak access-token validation is performed for every authenticated HTTP request, including a per-route audience and realm-role check.
 
 ### Least Privilege
 - `iot_write_user`: internal backend database user with restricted write access to application tables.
-- `iot_read_user`: `SELECT` on `sensor_data` and `dashboard_users` only.
+- `iot_read_user`: `SELECT` on `sensor_data` and `sensor_data_archive` only.
 - MQTT: `sensor01` can publish to `sensor01/data` and subscribe to `actuator01/data` (so the Pico receives relay commands). `controller` can subscribe to sensor topics and publish actuator topics. Both restricted by the broker ACL.
 - The controller does not receive database credentials. It only receives MQTT credentials and API credentials.
 - Containers are designed to avoid unnecessary privileges and do not use `--privileged`.
-- nginx forwards only `/health`, `/auth/`, and `/api/` — all other paths are dropped.
+- nginx forwards only `/health`, `/api/`, and the `/auth/` paths that belong to Keycloak (token endpoint, OIDC discovery, JWKS). All other paths are dropped.
 
 ## Web Application Firewall (Kap4 4.2)
 
@@ -107,7 +107,7 @@ mosquitto
 controller.py
     │
     │ HTTPS POST /api/v1/sensor-data
-    │ Authorization: Bearer <JWT>
+    │ Authorization: Bearer <Keycloak access token>
     ▼
 nginx
     │
@@ -125,9 +125,9 @@ All persistence happens through the backend API.
 
 The controller:
 - validates MQTT payloads
-- authenticates against the API
-- forwards readings via HTTPS/TLS
-- retries login if JWT tokens expire
+- authenticates against Keycloak as the `controller-client` confidential client (client-credentials flow)
+- forwards readings via HTTPS/TLS with the resulting access token in the Authorization header
+- refreshes the token before expiry, and re-fetches on a 401 from the backend
 
 ### Dashboard read
 
@@ -138,7 +138,7 @@ Browser
     ▼
 nginx
     ▼
-backend (JWT validation)
+backend (Keycloak token validation)
     ▼
 postgres
 ```
@@ -159,4 +159,4 @@ postgres.actuator_commands
 
 Actuator commands are queued through the backend API and stored centrally in PostgreSQL.
 
-> Note: Sensor ingestion has been fully refactored to use the API path (`controller → nginx → backend → postgres`). Actuator delivery can later be implemented through a dedicated dispatcher service or a future controller extension.
+> Note: Sensor ingestion and actuator delivery both use the API path (`controller ↔ nginx ↔ backend ↔ postgres`). LSTM and dashboard insert command rows via `/api/v1/actuator-command` and `/api/v1/sensor-request`; the controller drains them via `/api/v1/actuator-commands` and `/api/v1/sensor-requests` on a 2 s tick.

@@ -1,10 +1,12 @@
 """
 seed_fake_data.py — fill sensor_data and sensor_data_archive with fake data.
 
-Generates realistic temperature and humidity readings as a per-sensor random
-walk (so consecutive readings differ smoothly over time, not jumping multiple
-degrees per minute) and optionally injects anomalies to simulate a
-malfunctioning sensor.
+Generates clean, realistic temperature and humidity readings driven by a
+single shared ambient curve so that:
+  - all sensors in a run see the same diurnal cycle and slow multi-day drift
+  - humidity moves opposite to temperature (warmer air → lower RH)
+  - per-sensor noise is a small mean-reverting walk on top of the ambient,
+    not a free random walk that defines the whole signal
 
 Smart split based on timestamp:
   - rows with recorded_at < NOW() - 7 days  →  sensor_data_archive
@@ -16,44 +18,44 @@ Sensor IDs use a "demo-" prefix so fake data is trivial to clean up:
   DELETE FROM sensor_data         WHERE sensor_id LIKE 'demo-%';
   DELETE FROM sensor_data_archive WHERE sensor_id LIKE 'demo-%';
 
-How values are generated:
-  - For each sensor, rows are spread evenly across the time window and
-    processed in chronological order.
-  - Each reading is the previous reading nudged by a small random step plus
-    a mean-reversion pull back toward the sensor's normal mean.
-  - The step is hard-capped at max_delta_per_min * dt_minutes, so a 60-second
-    gap between samples can never move the value by more than max_delta_per_min.
-  - Defaults assume a normally heated room: temp ~21.5 °C, humidity ~45 %.
-  - Anomalies bypass the cap on purpose and jump to mean + anomaly_magnitude
-    (that is what makes them anomalous).
+Signal model:
+  ambient_offset(t) = diurnal_sine(t) + slow_drift_sine(t) + coarse_walk(t)
+  temperature(t)    = TEMP_MEAN + ambient_offset(t) + per_sensor_deviation(t)
+  humidity(t)       = HUMIDITY_MEAN - K * ambient_offset(t) + per_sensor_deviation(t)
+
+  per_sensor_deviation is a small mean-reverting walk with a per-minute cap,
+  so individual readings stay near the ambient curve and never drift away.
+
+Anomalies are intentionally not generated. The controller and dashboard
+validators filter invalid readings before they reach the database, so
+injecting them here would only train the LSTM on a distribution it never
+sees in production.
 
 Usage (from the docker/ directory on the Pi):
   docker compose --profile tools run --rm seeder [options]
 
 Examples:
-  # 10 000 rows over the last 30 days, default sensors, 0.5 % anomalies
+  # 10 000 rows per sensor over the last 30 days (default sensors → 20k total)
   docker compose --profile tools run --rm seeder
+
+  # one-row-per-minute over 7 days for the default sensors
+  docker compose --profile tools run --rm seeder --rows 10080 --days 7
 
   # large dataset spanning over 3 years to test the archive purge
   docker compose --profile tools run --rm seeder --rows 200000 --days 1100
 
-  # custom sensors, heavier corruption (5 % of rows are anomalies)
+  # custom sensors, 50k rows each
   docker compose --profile tools run --rm seeder \\
       --sensors demo-temp-01,demo-temp-02,demo-humid-01 \\
-      --rows 50000 --anomaly-percent 5
-
-  # clean run with no anomalies at all
-  docker compose --profile tools run --rm seeder --anomaly-percent 0
+      --rows 50000
 
 CLI options:
-  --rows N                 total rows to insert                       (default 10000)
+  --rows N                 rows per sensor (total inserts = rows * sensors) (default 10000)
   --days N                 timestamp spread in days                   (default 30)
   --sensors a,b,c          comma-separated sensor IDs                 (default demo-temp-01,demo-humid-01)
-  --anomaly-percent P      percentage of rows that are anomalies      (default 0.5, set 0 to disable)
-  --anomaly-magnitude M    how far an anomaly deviates from mean,
-                           in the sensor's unit (°C, % or unitless)   (default 15.0)
-  --max-delta-per-min F    cap on per-minute change for temperature
-                           sensors (humidity is scaled x6 internally) (default 0.25)
+  --max-delta-per-min F    cap on per-minute change for the per-sensor
+                           walk (humidity is scaled x6 internally)    (default 0.25)
+  --diurnal-amplitude A    half-swing of the 24h cycle, in °C         (default 1.5)
 
 Environment (provided by docker-compose):
   DB_HOST            postgres hostname inside app-net
@@ -73,24 +75,40 @@ from psycopg2.extras import execute_values
 BATCH_SIZE = 500
 ARCHIVE_THRESHOLD_DAYS = 7
 
-# Mean-reversion strength: each step pulls (mean - value) * REVERSION
-# fraction back toward the mean before adding random noise. Low enough
-# that walks meander, high enough that they don't drift away forever.
+# Mean-reversion strength of the per-sensor deviation walk back toward 0.
 REVERSION = 0.05
+
+TEMP_MEAN = 21.5
+HUMIDITY_MEAN = 45.0
+
+# Diurnal cycle: indoor temperature peaks in the afternoon, dips before dawn.
+DIURNAL_PEAK_HOUR_UTC = 15.0
+
+# Multi-day weather-like meander layered on top of the diurnal cycle.
+SLOW_DRIFT_AMPLITUDE_C = 0.6
+SLOW_DRIFT_PERIOD_DAYS = 4.0
+
+# Indoor RH drops by roughly 2-4 % per °C of warming when absolute moisture
+# is held constant. 2.5 sits in the middle of the empirical range.
+HUMIDITY_TEMP_COUPLING = 2.5
 
 
 def classify(sensor_id: str) -> tuple[str, float, float]:
     """Return (unit, normal_mean, noise_stddev_per_min) for a sensor ID.
 
-    noise_stddev_per_min controls the size of the random step per minute
-    before it is clamped by max_delta_per_min.
+    The sensor ID must contain "temp" or "humid"; nothing else maps to a
+    unit the production schema accepts. The old fallback produced rows
+    with unit="u" that never make it through the real controller.
     """
     name = sensor_id.lower()
     if "temp" in name:
-        return ("C", 21.5, 0.05)
+        return ("C", TEMP_MEAN, 0.05)
     if "humid" in name:
-        return ("%", 45.0, 0.3)
-    return ("u", 50.0, 0.5)
+        return ("%", HUMIDITY_MEAN, 0.3)
+    raise SystemExit(
+        f"unknown sensor kind in id {sensor_id!r}: name must contain"
+        f" 'temp' or 'humid' so the seeder picks a valid unit (C or %)"
+    )
 
 
 def delta_cap_for(sensor_id: str, base_cap: float) -> float:
@@ -134,54 +152,95 @@ def insert_batch_archive(cur, rows):
     )
 
 
-def generate_series(sensor_id, count, span_seconds, now,
-                    anomaly_indices, anomaly_magnitude, base_delta_cap):
-    """Yield (sensor_id, value, unit, recorded_at) tuples for one sensor.
+def build_ambient_offset(span_seconds: float, now: datetime,
+                         diurnal_amplitude: float):
+    """Return a callable ambient_offset(ts) → °C-offset from TEMP_MEAN.
 
-    Walks chronologically forward from oldest to newest so that each value
-    can depend on the previous one. anomaly_indices is a set of positions
-    (0..count-1) where the value should be forced to mean + anomaly_magnitude.
+    The same callable is used by every sensor in the run, so the diurnal cycle
+    and slow drift are shared (and humidity tracks temperature inversely).
+
+    The slow component is a mean-reverting walk precomputed on a 10-minute
+    grid; we interpolate linearly between grid points at lookup time.
     """
+    grid_step_seconds = 10 * 60
+    n_points = max(2, int(span_seconds // grid_step_seconds) + 2)
+    walk = [0.0]
+    walk_reversion = 0.02
+    walk_stddev = 0.04
+    for _ in range(n_points - 1):
+        pull = -walk[-1] * walk_reversion
+        walk.append(walk[-1] + pull + random.gauss(0.0, walk_stddev))
+    oldest = now - timedelta(seconds=span_seconds)
+
+    # Phase the diurnal sine so it peaks at DIURNAL_PEAK_HOUR_UTC.
+    phase_hours = DIURNAL_PEAK_HOUR_UTC - 6.0
+
+    def offset(ts: datetime) -> float:
+        elapsed = (ts - oldest).total_seconds()
+
+        idx_f = elapsed / grid_step_seconds
+        i0 = max(0, min(n_points - 2, int(idx_f)))
+        frac = idx_f - i0
+        slow_walk = walk[i0] * (1 - frac) + walk[i0 + 1] * frac
+
+        hour = ts.hour + ts.minute / 60.0 + ts.second / 3600.0
+        diurnal = diurnal_amplitude * math.sin(
+            2 * math.pi * (hour - phase_hours) / 24.0
+        )
+
+        drift = SLOW_DRIFT_AMPLITUDE_C * math.sin(
+            2 * math.pi * elapsed / (SLOW_DRIFT_PERIOD_DAYS * 86400.0)
+        )
+
+        return diurnal + drift + slow_walk
+
+    return offset
+
+
+def generate_series(sensor_id, count, span_seconds, now,
+                    base_delta_cap, ambient_offset):
+    """Yield (sensor_id, value, unit, recorded_at) tuples for one sensor."""
     unit, mean, noise_stddev_per_min = classify(sensor_id)
     delta_cap = delta_cap_for(sensor_id, base_delta_cap)
+    is_temp = unit == "C"
 
-    # Evenly-spaced timestamps from oldest to newest. Tiny jitter so multiple
-    # sensors don't all land on the exact same recorded_at.
     if count == 1:
         timestamps = [now - timedelta(seconds=span_seconds / 2)]
     else:
         step = span_seconds / (count - 1)
+        # Small jitter so multiple sensors don't land on identical recorded_at
+        # values, but tight enough that the cadence still reads as regular to
+        # the LSTM (jitter ≤ step/4, capped at 2 s for the typical 60 s grid).
+        jitter = min(2.0, step / 4)
         timestamps = [
             now - timedelta(seconds=max(
                 0.0,
-                span_seconds - i * step + random.uniform(-step / 4, step / 4),
+                span_seconds - i * step + random.uniform(-jitter, jitter),
             ))
             for i in range(count)
         ]
 
-    value = random.gauss(mean, noise_stddev_per_min * 10)  # seed somewhere near mean
+    # Per-sensor deviation from the shared ambient curve. Small, mean-reverting.
+    deviation = random.gauss(0.0, noise_stddev_per_min * 5)
     prev_ts = timestamps[0]
 
-    for i, ts in enumerate(timestamps):
-        if i in anomaly_indices:
-            # Anomaly: snap to mean + magnitude, bypass the per-minute cap on
-            # purpose. The next non-anomaly reading will start walking back
-            # from this spike.
-            value = mean + anomaly_magnitude
+    for ts in timestamps:
+        dt_minutes = max((ts - prev_ts).total_seconds() / 60.0, 1e-6)
+        pull = -deviation * REVERSION
+        noise = random.gauss(0.0, noise_stddev_per_min * math.sqrt(dt_minutes))
+        step_value = pull + noise
+        max_step = delta_cap * dt_minutes
+        if step_value > max_step:
+            step_value = max_step
+        elif step_value < -max_step:
+            step_value = -max_step
+        deviation += step_value
+
+        amb = ambient_offset(ts)
+        if is_temp:
+            value = mean + amb + deviation
         else:
-            dt_minutes = max((ts - prev_ts).total_seconds() / 60.0, 1e-6)
-            # Mean-reverting random step, clamped to physical realism.
-            # Noise scales with sqrt(dt) so variance grows linearly in time,
-            # which is the standard Wiener-process behavior for a random walk.
-            pull = (mean - value) * REVERSION
-            noise = random.gauss(0.0, noise_stddev_per_min * math.sqrt(dt_minutes))
-            step_value = pull + noise
-            max_step = delta_cap * dt_minutes
-            if step_value > max_step:
-                step_value = max_step
-            elif step_value < -max_step:
-                step_value = -max_step
-            value += step_value
+            value = mean - HUMIDITY_TEMP_COUPLING * amb + deviation
 
         prev_ts = ts
         yield (sensor_id, round(value, 2), unit, ts)
@@ -189,42 +248,42 @@ def generate_series(sensor_id, count, span_seconds, now,
 
 def main():
     parser = argparse.ArgumentParser(description="Seed fake sensor data.")
-    parser.add_argument("--rows", type=int, default=10000)
+    parser.add_argument("--rows", type=int, default=10000,
+                        help="rows per sensor (total inserts = rows * sensors)")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--sensors", type=str, default="demo-temp-01,demo-humid-01")
-    parser.add_argument("--anomaly-percent", type=float, default=0.5,
-                        help="percentage of rows that are anomalies; 0 disables anomalies")
-    parser.add_argument("--anomaly-magnitude", type=float, default=15.0,
-                        help="how far an anomaly deviates from the sensor mean, in its unit")
     parser.add_argument("--max-delta-per-min", type=float, default=0.25,
-                        help="cap on per-minute change for temperature sensors "
+                        help="cap on per-minute change for the per-sensor walk "
                              "(humidity is scaled internally)")
+    parser.add_argument("--diurnal-amplitude", type=float, default=1.5,
+                        help="half-swing of the 24h ambient cycle, in °C")
     args = parser.parse_args()
 
     sensors = [s.strip() for s in args.sensors.split(",") if s.strip()]
     if not sensors:
         parser.error("--sensors must contain at least one ID")
-    if args.anomaly_percent < 0 or args.anomaly_percent > 100:
-        parser.error("--anomaly-percent must be between 0 and 100")
 
-    now = datetime.now(timezone.utc)
+    # Snap the anchor to the minute so recorded_at values look "tidy"
+    # (e.g. 21:34:00, 21:33:00 ±jitter) instead of inheriting the fractional
+    # second from wall-clock now().
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     archive_cutoff = now - timedelta(days=ARCHIVE_THRESHOLD_DAYS)
     span_seconds = args.days * 24 * 3600
 
-    print(f"generating {args.rows} rows across {args.days} days "
-          f"for sensors: {', '.join(sensors)} "
-          f"(anomalies: {args.anomaly_percent}% @ +{args.anomaly_magnitude}, "
-          f"max temp delta: {args.max_delta_per_min}/min)", flush=True)
+    ambient_offset = build_ambient_offset(span_seconds, now, args.diurnal_amplitude)
 
-    # Split row budget across sensors. Any remainder goes to the first sensors
-    # so total stays exactly --rows.
-    per_sensor = [args.rows // len(sensors)] * len(sensors)
-    for i in range(args.rows % len(sensors)):
-        per_sensor[i] += 1
+    total = args.rows * len(sensors)
+    print(f"generating {args.rows} rows per sensor ({total} total) "
+          f"across {args.days} days "
+          f"for sensors: {', '.join(sensors)} "
+          f"(diurnal: ±{args.diurnal_amplitude}°C, "
+          f"max walk delta: {args.max_delta_per_min}/min)", flush=True)
+
+    per_sensor = [args.rows] * len(sensors)
 
     active_buf = []
     archive_buf = []
-    counts = {"active": 0, "archive": 0, "anomalies": 0}
+    counts = {"active": 0, "archive": 0}
 
     conn = connect()
     try:
@@ -234,14 +293,9 @@ def main():
                     if count == 0:
                         continue
 
-                    n_anomalies = int(round(count * args.anomaly_percent / 100.0))
-                    anomaly_indices = set(random.sample(range(count), n_anomalies)) if n_anomalies > 0 else set()
-                    counts["anomalies"] += len(anomaly_indices)
-
                     for sid, value, unit, recorded_at in generate_series(
                         sensor_id, count, span_seconds, now,
-                        anomaly_indices, args.anomaly_magnitude,
-                        args.max_delta_per_min,
+                        args.max_delta_per_min, ambient_offset,
                     ):
                         if recorded_at < archive_cutoff:
                             archived_at = recorded_at + timedelta(days=ARCHIVE_THRESHOLD_DAYS)
@@ -271,8 +325,7 @@ def main():
         conn.close()
 
     print(f"done: {counts['active']} into sensor_data, "
-          f"{counts['archive']} into sensor_data_archive, "
-          f"{counts['anomalies']} anomalies",
+          f"{counts['archive']} into sensor_data_archive",
           flush=True)
 
 

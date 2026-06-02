@@ -98,9 +98,6 @@ echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_write_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_read_password.txt
 
-# JWT signing key
-echo "$(openssl rand -base64 48)" > ~/API-Rpi16GB/docker/secrets/jwt_secret.txt
-
 # MQTT controller credentials
 echo "controller"                 > ~/API-Rpi16GB/docker/secrets/mqtt_controller_user.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/mqtt_controller_password.txt
@@ -115,9 +112,26 @@ chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 
 The CA cert (`ca_cert.txt`) is written automatically by `setup_tls.sh` in the next step.
 
+Generate Keycloak secret files. The Keycloak DB and admin passwords are random; the client secrets are intentionally hardcoded in `docker/keycloak/iot-realm.json` (see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)) and must be written verbatim into the secret files:
+
+```sh
+# Random passwords for the Keycloak DB and admin user
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_db_password.txt
+echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/keycloak_admin_password.txt
+
+# Client secrets — must match the hardcoded values in iot-realm.json verbatim.
+# printf, not echo: Keycloak rejects a client_secret with a trailing newline.
+printf 'sc_controller_client' > ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
+printf 'sc_lstm_client'       > ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
+
+chmod 600 ~/API-Rpi16GB/docker/secrets/keycloak_*.txt
+```
+
+If a client secret is rotated in `iot-realm.json`, update the corresponding `.txt` file with the same value and restart Keycloak (or push the new secret via Admin API).
+
 ### 1.9 Provision TLS Certificates
 
-Run the TLS setup script. It creates a local CA, signs a cert for nginx (`backend.lab.local`) and a cert for the MQTT broker, and drops the CA cert into `docker/secrets/` for the controller container.
+Run the TLS setup script. It creates a local CA, signs a cert for nginx (`www.lab.local`) and a cert for the MQTT broker, and drops the CA cert into `docker/secrets/` for the controller container.
 
 ```sh
 cd ~/API-Rpi16GB
@@ -166,6 +180,25 @@ Check status:
 ```sh
 docker compose ps
 docker compose logs -f backend
+```
+
+Verify Keycloak and the realm import completed successfully:
+
+```sh
+# Keycloak should be healthy after ~2 minutes
+docker compose logs keycloak | grep -E "started|imported|ERROR"
+
+# Realm endpoint must respond
+curl -s http://localhost:8080/auth/realms/iot | jq '{realm: .realm, sslRequired: .sslRequired}'
+# Expected: { "realm": "iot", "sslRequired": "external" }
+
+# Test login with the built-in test user
+curl -s -X POST http://localhost:8080/auth/realms/iot/protocol/openid-connect/token \
+  -d "grant_type=password" \
+  -d "client_id=dashboard-client" \
+  -d "username=iotuser01" \
+  -d "password=Test1234!" | jq -r '.token_type + " token received: " + (.expires_in|tostring) + "s"'
+# Expected: Bearer token received: 300s
 ```
 
 ### Verify
@@ -243,12 +276,14 @@ Networking now requires a `std.Io.Threaded` instance — create it in `main` and
 
 ## Part 5 — Routine Operations
 
-| Task | Command (on Pi, in `docker/`) |
+| Task | Command (on Pi, in repo root) |
 |------|-------------------------------|
-| View backend logs | `docker compose logs -f backend` |
-| Restart backend only | `docker compose restart backend` |
-| Stop everything | `docker compose down` |
-| Stop and wipe DB | `docker compose down -v` ⚠️ destroys data |
+| View backend logs | `docker compose -f docker/docker-compose.yml logs -f backend` |
+| Restart backend only | `docker compose -f docker/docker-compose.yml restart backend` |
+| Stop everything | `docker compose -f docker/docker-compose.yml down` |
+| Stop and wipe DB | `docker compose -f docker/docker-compose.yml down -v` ⚠️ destroys data |
 | Check resource usage | `docker stats` |
 | Check connected WLAN clients (on AP) | `sudo iw dev wlan0 station dump` |
 | Check DHCP leases (on AP) | `cat /var/lib/misc/dnsmasq.leases` |
+| Keycloak DB sichern | `./scripts/backup_keycloak_db.sh` |
+| Keycloak DB wiederherstellen | siehe [keycloak-backup.md](keycloak-backup.md) |

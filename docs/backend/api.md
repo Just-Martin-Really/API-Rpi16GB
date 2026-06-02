@@ -1,34 +1,14 @@
 # API Reference
 
-Base URL: `https://backend-server.local`
+Base URL: `https://www.lab.local`
 
-All endpoints return `application/json`. All `/api/` endpoints require a valid JWT in the `Authorization: Bearer <token>` header — obtain one via `POST /auth/login`.
+All endpoints return `application/json`. All `/api/v1/` endpoints require a valid RS256 access token from Keycloak in the `Authorization: Bearer <token>` header. Each endpoint additionally requires a specific token audience and realm role; the matrix is at the bottom of this page.
 
----
+The backend itself does not issue tokens. Clients obtain access tokens directly from Keycloak via the OAuth2 / OIDC flows configured for the `iot` realm:
 
-## POST /auth/login
-
-Authenticates a dashboard user and returns a JWT. No `Authorization` header required.
-
-**Request body**
-```json
-{
-  "username": "admin",
-  "password": "changeme"
-}
-```
-
-**Response 200**
-```json
-{"token": "<jwt>"}
-```
-
-The token is valid for 24 hours. Include it in subsequent requests as `Authorization: Bearer <token>`.
-
-**Response 401**
-```json
-{"error": "unauthorized"}
-```
+- Browser dashboard: Authorization Code Flow against the public client `dashboard-client`.
+- Controller (Python service): Client Credentials Flow as the confidential client `controller-client`.
+- LSTM service: Client Credentials Flow as the confidential client `lstm-client`.
 
 ---
 
@@ -45,7 +25,18 @@ Returns the server liveness status. No auth required.
 
 ## GET /api/v1/sensor-data
 
-Returns all sensor readings, newest first.
+Returns sensor readings, newest first. Accepts optional `from` and `to` query parameters (ISO-8601 timestamps) to filter `recorded_at`. Without parameters, returns all rows.
+
+**Required audience:** `dashboard-client`
+**Required role:** `dashboard-user`
+
+**Examples**
+
+```
+GET /api/v1/sensor-data
+GET /api/v1/sensor-data?from=2026-05-20T00:00:00Z
+GET /api/v1/sensor-data?from=2026-05-20T00:00:00Z&to=2026-05-21T00:00:00Z
+```
 
 **Response 200**
 ```json
@@ -60,11 +51,19 @@ Returns all sensor readings, newest first.
 ]
 ```
 
+**Response 400** when `from` or `to` is malformed:
+```json
+{"error": "invalid from/to"}
+```
+
 ---
 
 ## POST /api/v1/sensor-data
 
-Inserts a new sensor reading. Used by the controller service (not directly by the MCU).
+Inserts a new sensor reading. Used by the controller service.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
 
 **Request body**
 ```json
@@ -86,9 +85,9 @@ Inserts a new sensor reading. Used by the controller service (not directly by th
 {"created": true}
 ```
 
-**Response 400** — missing or invalid fields
+**Response 400** when fields are missing or invalid:
 ```json
-{"error": "invalid request body"}
+{"error": "invalid json"}
 ```
 
 ---
@@ -97,18 +96,23 @@ Inserts a new sensor reading. Used by the controller service (not directly by th
 
 Queues a command for an actuator. The controller service picks it up within ~2 seconds and publishes it to the actuator's MQTT topic (`<actuator_id>/data`).
 
+**Required audience:** `lstm-client`
+**Required role:** `lstm-control`
+
 **Request body**
 ```json
 {
   "actuator_id": "actuator01",
-  "command": "FAN_ON"
+  "command": "FAN_ON",
+  "issued_by": "machine"
 }
 ```
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `actuator_id` | string | yes | max 64 chars, must match `^[A-Za-z0-9_-]+$` to be dispatched by the controller |
-| `command` | string | yes | max 64 chars, must match `^[A-Z0-9_]+$` to be dispatched; current commands: `FAN_ON`, `FAN_OFF`, `HEAT_ON`, `HEAT_OFF` |
+| `command` | string | yes | max 64 chars, must match `^[A-Z0-9_]+$` to be dispatched; current commands: `FAN_ON`, `FAN_OFF`, `HEAT_ON`, `HEAT_OFF`, `on`, `off` |
+| `issued_by` | string | no | `"user"` (default) or `"machine"`; recorded in the row for audit |
 
 Rows whose `actuator_id` or `command` fail the regex are accepted by the API but skipped (and marked sent) by the controller to prevent MQTT topic injection from DB content.
 
@@ -117,7 +121,7 @@ Rows whose `actuator_id` or `command` fail the regex are accepted by the API but
 {"queued": true}
 ```
 
-**Response 400** — missing or invalid fields
+**Response 400** when fields are missing or invalid:
 ```json
 {"error": "invalid json"}
 ```
@@ -129,6 +133,9 @@ Rows whose `actuator_id` or `command` fail the regex are accepted by the API but
 Queues a request for a sensor to publish a fresh reading. The controller service picks it up within ~2 seconds and publishes it to the sensor's MQTT topic (`<sensor_id>/request`). The Pico, on receiving `READ_NOW`, reads the DHT22 and publishes the values on `<sensor_id>/data` as usual.
 
 Used by the dashboard or a watchdog to force a fresh reading when periodic data has not arrived within its expected cadence. The request itself does not wait for the reading; the caller polls `GET /api/v1/sensor-data` for the new row, or watches the broker.
+
+**Required audience:** `dashboard-client`
+**Required role:** `dashboard-user`
 
 **Request body**
 ```json
@@ -159,6 +166,134 @@ See [Sensor Request Flow](sensor-request-flow.md) for the end-to-end path and th
 
 ---
 
+## GET /api/v1/actuator-commands
+
+Returns up to 100 unsent rows from `actuator_commands`, oldest first. Polled by the controller every 2 seconds; each returned row is published to MQTT and then acknowledged via `POST /api/v1/actuator-commands/sent`.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Response 200**
+```json
+{
+  "commands": [
+    {"id": 42, "actuator_id": "heater01", "command": "HEAT_ON"}
+  ]
+}
+```
+
+The list is empty when no rows have `sent_at IS NULL`.
+
+---
+
+## POST /api/v1/actuator-commands/sent
+
+Marks a previously fetched row as dispatched (`sent_at = NOW()`). Idempotent: re-acking an already-sent row returns `updated: 0`.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Request body**
+```json
+{"id": 42}
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `id` | integer | yes | positive; primary key of the `actuator_commands` row |
+
+**Response 200**
+```json
+{"updated": 1}
+```
+
+**Response 400** when `id` is missing, non-numeric, or non-positive:
+```json
+{"error": "id must be a positive integer"}
+```
+
+---
+
+## GET /api/v1/sensor-requests
+
+Returns up to 100 unsent rows from `sensor_requests`, oldest first. Polled by the controller every 2 seconds; each returned row is published to MQTT and then acknowledged via `POST /api/v1/sensor-requests/sent`.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Response 200**
+```json
+{
+  "requests": [
+    {"id": 17, "sensor_id": "sensor01", "command": "READ_NOW"}
+  ]
+}
+```
+
+---
+
+## POST /api/v1/sensor-requests/sent
+
+Marks a previously fetched sensor-request row as dispatched. Idempotent.
+
+**Required audience:** `controller-client`
+**Required role:** `controller-ingest`
+
+**Request body**
+```json
+{"id": 17}
+```
+
+**Response 200**
+```json
+{"updated": 1}
+```
+
+---
+
+## Authentication errors
+
+| Status | When |
+|--------|------|
+| 401 Unauthorized | `Authorization` header is missing or does not start with `Bearer `. |
+| 403 Forbidden | Signature does not verify against any cached JWKS key (after one refresh attempt), token is expired, issuer does not match `KEYCLOAK_ISSUER`, audience does not match the route's required `aud` / `azp`, or the required realm role is absent from `realm_access.roles`. |
+
+The body for both is `{"error":"forbidden"}` (or `{"error":"missing authorization header"}` for 401). Token contents are never echoed back or logged.
+
+---
+
+## Route policy matrix
+
+| Method | Path | Required audience | Required role | DB pool |
+|---|---|---|---|---|
+| GET  | `/api/v1/sensor-data`            | `dashboard-client` **or** `lstm-client` | `dashboard-user` **or** `lstm-control` | `iot_read_user`  |
+| POST | `/api/v1/sensor-data`            | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/actuator-command`       | `lstm-client`       | `lstm-control`      | `iot_write_user` |
+| GET  | `/api/v1/actuator-commands`      | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/actuator-commands/sent` | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/sensor-request`         | `dashboard-client`  | `dashboard-user`    | `iot_write_user` |
+| GET  | `/api/v1/sensor-requests`        | `controller-client` | `controller-ingest` | `iot_write_user` |
+| POST | `/api/v1/sensor-requests/sent`   | `controller-client` | `controller-ingest` | `iot_write_user` |
+
+The backend matches the audience against the token's `aud` claim if it is a string or array, falling back to `azp` (Keycloak's authorized-party claim, which always carries the client_id). The realm role is read from `realm_access.roles`.
+
+`GET /api/v1/sensor-data` is the one route with two accepted policies: the dashboard reads the same series the LSTM control loop feeds its model with, so a token signed for either `dashboard-client` + `dashboard-user` or `lstm-client` + `lstm-control` is admitted. The router walks the policy list and accepts the first match; every other route keeps a single (audience, role) pair.
+
+---
+
+## Token verification
+
+The backend boots with two environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KEYCLOAK_JWKS_URL` | `http://keycloak:8080/auth/realms/iot/protocol/openid-connect/certs` | JWKS endpoint. Internal compose-network URL; no TLS needed. The `/auth/` prefix matches `KC_HTTP_RELATIVE_PATH=/auth` on the keycloak service. |
+| `KEYCLOAK_ISSUER` | `https://www.lab.local/auth/realms/iot` | Required `iss` claim in every accepted token. |
+
+On startup the verifier best-effort fetches JWKS once so the first request does not pay the round-trip. Subsequent unknown `kid`s trigger one refresh-then-retry; if the key still cannot be resolved the request is rejected with 403.
+
+---
+
 ## Database Schema
 
 ```sql
@@ -174,6 +309,7 @@ CREATE TABLE actuator_commands (
     id          BIGSERIAL    PRIMARY KEY,
     actuator_id VARCHAR(64)  NOT NULL,
     command     VARCHAR(64)  NOT NULL,
+    issued_by   VARCHAR(16)  NOT NULL DEFAULT 'user',  -- 'user' | 'machine'
     issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     sent_at     TIMESTAMPTZ           -- NULL until the controller dispatches it
 );
@@ -186,3 +322,5 @@ CREATE TABLE sensor_requests (
     sent_at     TIMESTAMPTZ           -- NULL until the controller dispatches it
 );
 ```
+
+The `dashboard_users` table from earlier phases is gone; user identity now lives entirely in Keycloak. `docker/postgres/migrate.sql` includes `DROP TABLE IF EXISTS dashboard_users` for the live Pi.

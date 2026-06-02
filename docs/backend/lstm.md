@@ -43,13 +43,13 @@ python forecast.py
 
 | Source | Use case |
 |---|---|
-| `api` (default) | Pulls live data from the backend via JWT. Authenticated as the `lstm` service account in `dashboard_users`. |
+| `api` (default) | Pulls live data from the backend via a Keycloak access token. Authenticates as the `lstm-client` confidential client using the client-credentials flow. |
 | `sim` | Two-sine-wave synthetic series from slide 5-31. Zero setup, useful for offline development. |
 | `csv` | Reads `data/temps.csv`. Useful for one-off datasets. |
 
 ### `DATA_SOURCE=api` (default)
 
-Authenticates as the `lstm` service account, calls `GET /api/v1/sensor-data` with a bearer JWT, filters rows where `unit == "C"`, sorts by `recorded_at`, returns the last `API_DAYS` days.
+Authenticates as the `lstm-client` Keycloak client using the client-credentials flow, calls `GET /api/v1/sensor-data` with the resulting RS256 access token in the `Authorization` header, filters rows where `unit == "C"`, sorts by `recorded_at`, returns the last `API_DAYS` days.
 
 Knob: `API_DAYS` (default 7). The backend archives rows older than 7 days into `sensor_data_archive`, so the effective training window is capped at 7 days regardless of `API_DAYS`.
 
@@ -73,10 +73,11 @@ Production values are set in the `lstm` service block of `docker/docker-compose.
 
 ```
 # ── API access ────────────────────────────────────────────────────────────────
-API_BASE_URL=https://192.168.50.92
+API_BASE_URL=https://www.lab.local
 API_CA_CERT=./ca.crt
-LSTM_USER=lstm
-LSTM_PASS_FILE=./lstm_password.txt
+KEYCLOAK_TOKEN_URL=https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
+LSTM_CLIENT_ID=lstm-client
+LSTM_CLIENT_SECRET_FILE=./keycloak_lstm_secret.txt
 
 # ── Data source ───────────────────────────────────────────────────────────────
 DATA_SOURCE=api
@@ -91,16 +92,19 @@ ACTUATOR_HEATER_ID=heater01
 ACTUATOR_COOLER_ID=cooler01
 ```
 
-### Service account credentials
+### Keycloak client credentials
 
-The control loop logs in via `POST /auth/login` as the `lstm` user. Both `init.sql` (fresh DBs) and `migrate.sql` (existing DBs) seed the row with the password `changeme`. Rotate before going live:
+The control loop authenticates as the `lstm-client` confidential client in the `iot` realm. The realm is provisioned out of `docker/keycloak/iot-realm.json`; `lstm-client` is granted the `lstm-control` realm role, which the backend checks before accepting a `POST /api/v1/actuator-command` call.
+
+The client secret is hardcoded in `iot-realm.json` (see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)) and the same verbatim value lives in the secret file:
 
 ```sh
-echo "<strong password>" > docker/secrets/dashboard_lstm_password.txt
-docker/set_passwords.sh
+printf 'sc_lstm_client' > docker/secrets/keycloak_lstm_secret.txt
 ```
 
-`set_passwords.sh` updates `dashboard_users.password_sha256` for the `lstm` row. The same secret file is mounted into the `lstm` container at `/run/secrets/dashboard_lstm_password`. For local-workstation development put the matching password into the file referenced by `LSTM_PASS_FILE` in `lstm/.env`.
+The file is mounted into the `lstm` container at `/run/secrets/keycloak_lstm_secret`. For local-workstation development put the same value into the file referenced by `LSTM_CLIENT_SECRET_FILE` in `lstm/.env`.
+
+`api_client.ApiClient` reads the secret, requests a token from `https://www.lab.local/auth/realms/iot/protocol/openid-connect/token` via the client-credentials grant, caches it, and refreshes `TOKEN_REFRESH_MARGIN_SECONDS` (30 s) before its declared `expires_in`. A 401 from the backend forces a one-shot refresh and a retry, covering token rotations and brief Keycloak restarts.
 
 ### CA cert
 
@@ -129,7 +133,7 @@ next = (1 - ALPHA) * model_prediction + ALPHA * last_window_value
 
 ```
 lstm/
-  api_client.py       JWT login + /api/v1 client used by data_source and control_loop
+  api_client.py       Keycloak client-credentials + /api/v1 client used by data_source and control_loop
   data_source.py      pluggable source: api / sim / csv
   train.py            scaler -> sequences -> model fit -> save artifacts
   forecast.py         one-shot: load model, pull window, predict, plot
@@ -138,7 +142,7 @@ lstm/
   evaluate.py         holdout MAE + RMSE
   requirements.txt
   .env.example        template for .env (gitignored)
-  .gitignore          ignores .env, ca.crt, lstm_password.txt, .venv, temps.csv, tflite artifact
+  .gitignore          ignores .env, ca.crt, keycloak_lstm_secret.txt, .venv, temps.csv, tflite artifact
   data/
     model.keras       trained model (committed; baked into the lstm image)
     scaler.npz        scaler mean + scale (committed; baked into the lstm image)
@@ -156,7 +160,7 @@ The control loop never talks to the controller directly. The two are decoupled b
 sensor01 ──── MQTT ────► mosquitto ──── webserver ────► sensor_data
                                                             │
                                                             │ GET /api/v1/sensor-data
-                                                            │ (JWT bearer, as 'lstm' user)
+                                                            │ (RS256 bearer, as lstm-client)
                                                             ▼
                                             ┌──────────────────────────────┐
                                             │   lstm/control_loop.py       │
@@ -177,7 +181,7 @@ sensor01 ──── MQTT ────► mosquitto ──── webserver ─�
                                             controller.py ──── MQTT ────► Pico (heater/cooler)
 ```
 
-The LSTM is one of several command sources. Dashboard buttons and operator scripts (`scripts/heater.sh`, `scripts/cooler.sh`) write to the same table with `issued_by='user'`. `controller.py` drains them all identically, so the LSTM does not need any controller-side changes to take effect; it just inserts rows. `issued_by` is purely for auditing which source produced which command.
+The LSTM is one of several command sources. Dashboard buttons write to the same table with `issued_by='user'`. `controller.py` drains them all identically, so the LSTM does not need any controller-side changes to take effect; it just inserts rows. `issued_by` is purely for auditing which source produced which command.
 
 One iteration of the loop:
 
@@ -188,8 +192,19 @@ One iteration of the loop:
    - else if `max(forecast[:LOOKAHEAD]) > TARGET_HIGH`, the cooler turns on and the heater turns off;
    - otherwise both off.
 4. Diff against the last sent state. Only changes are emitted; the queue is not spammed with identical commands.
-5. For each changed (role, command), POST `/api/v1/actuator-command` with `issued_by='machine'`.
+5. For each changed (role, command), translate the internal `(role, "on"|"off")` pair to the wire command the Pico firmware speaks, then POST `/api/v1/actuator-command` with `issued_by='machine'`.
 6. Sleep `LOOP_SECONDS` and loop.
+
+The translation lives in `ROLE_COMMAND_TO_WIRE` in `control_loop.py`:
+
+| Internal `(role, state)` | Wire command sent to the backend |
+|---|---|
+| `("heater", "on")`  | `HEAT_ON`  |
+| `("heater", "off")` | `HEAT_OFF` |
+| `("cooler", "on")`  | `FAN_ON`   |
+| `("cooler", "off")` | `FAN_OFF`  |
+
+The Pico subscribes to a single actuator topic and switches on the command string, so off/on are spelled out as explicit `HEAT`/`FAN` verbs on the wire; the loop only carries the abstract `(role, state)` pair internally. Backend, controller and Pico all agree on these four strings: anything else is rejected by the schema check on `actuator_commands.command`.
 
 ### Run
 
@@ -345,10 +360,11 @@ lstm:
     dockerfile: docker/lstm/Dockerfile
   restart: unless-stopped
   environment:
-    API_BASE_URL: https://backend.lab.local:8443
+    API_BASE_URL: https://www.lab.local
     API_CA_CERT: /run/secrets/ca_cert
-    LSTM_USER: lstm
-    LSTM_PASS_FILE: /run/secrets/dashboard_lstm_password
+    KEYCLOAK_TOKEN_URL: https://www.lab.local/auth/realms/iot/protocol/openid-connect/token
+    LSTM_CLIENT_ID: lstm-client
+    LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
     DATA_SOURCE: api
     TARGET_LOW: "19.0"
     TARGET_HIGH: "23.0"
@@ -358,7 +374,7 @@ lstm:
     ACTUATOR_COOLER_ID: cooler01
   secrets:
     - ca_cert
-    - dashboard_lstm_password
+    - keycloak_lstm_secret
   networks:
     - app-net
   depends_on:
@@ -368,20 +384,20 @@ lstm:
 
 Three compose-level details make this work:
 
-- The `dashboard_lstm_password` secret is declared at the top of `docker-compose.yml` pointing at `./secrets/dashboard_lstm_password.txt`. The file is gitignored; create it on the Pi before bringing the service up.
-- The `nginx` service has a network alias `backend.lab.local` so the TLS hostname matches the cert CN. The `lstm` service hits `https://backend.lab.local:8443`, Docker DNS resolves it to the nginx container, and certificate verification against `ca_cert` passes.
-- The `nginx` service has a TCP healthcheck (`nc -z 127.0.0.1 8443`), and `lstm` waits for `condition: service_healthy` before starting. This avoids spurious login failures on `docker compose up` from racing nginx's TLS init. The daemon's per-iteration `try/except` is still there as a backstop for transient network blips later, but cold-start races are no longer one of them.
+- The `keycloak_lstm_secret` secret is declared at the top of `docker-compose.yml` pointing at `./secrets/keycloak_lstm_secret.txt`. The file is gitignored; populate it on the Pi during initial setup with the hardcoded value from `docker/keycloak/iot-realm.json` (currently `sc_lstm_client`, see [`docker/keycloak/keycloak_secrets.md`](../../docker/keycloak/keycloak_secrets.md)).
+- The `nginx` service has a network alias `www.lab.local` so the TLS hostname matches the cert CN. The `lstm` service hits `https://www.lab.local` for both the Keycloak token endpoint and the backend API, Docker DNS resolves it to the nginx container, and certificate verification against `ca_cert` passes for both hops.
+- The `nginx` service has a TCP healthcheck (`nc -z 127.0.0.1 8443`), and `lstm` waits for `condition: service_healthy` before starting. This avoids spurious failures on `docker compose up` from racing nginx's TLS init. The daemon's per-iteration `try/except` is still there as a backstop for transient network blips later, but cold-start races are no longer one of them.
 
 ### First-time setup on the Pi
 
 1. Train on a workstation: `cd lstm && python train.py`. This writes `data/model.keras` and `data/scaler.npz`.
 2. Commit and push: `git add lstm/data/model.keras lstm/data/scaler.npz && git commit -m "chore(lstm): retrain artifacts" && git push`.
 3. On the Pi: `git pull`.
-4. Set the LSTM service password (same value goes into the secret file and into `dashboard_users.password_sha256`):
+4. Write the Keycloak `lstm-client` secret. The value is hardcoded in `docker/keycloak/iot-realm.json` and the secret file must carry the identical string:
 
    ```sh
-   echo "<strong password>" > docker/secrets/dashboard_lstm_password.txt
-   docker/set_passwords.sh
+   printf 'sc_lstm_client' > docker/secrets/keycloak_lstm_secret.txt
+   chmod 600 docker/secrets/keycloak_lstm_secret.txt
    ```
 
 5. Build the image: `cd docker && docker compose build lstm`. First build is slow because the TensorFlow wheel is large.

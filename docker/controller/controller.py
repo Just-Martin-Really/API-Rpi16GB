@@ -1,3 +1,14 @@
+# controller.py
+# Aufgabe: Brücke zwischen MQTT-Broker und Zig-Backend-API.
+#   - Empfängt Sensor-Messwerte per MQTT und schickt sie per HTTP ans Backend
+#   - Holt Aktor-Befehle und Sensor-Anfragen vom Backend ab und publiziert
+#     sie per MQTT an die entsprechenden Geräte
+#
+# Authentifizierung ab Phase 6: OAuth2 Client-Credentials-Flow gegen Keycloak
+# statt statischem API-Key. Der Controller holt sich ein kurzlebiges
+# Access-Token und hängt es als "Authorization: Bearer <token>" an jeden
+# API-Request.
+
 import json
 import os
 import re
@@ -5,78 +16,303 @@ import ssl
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
+import threading
 from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
+from prometheus_client import Counter, Gauge, start_http_server
+
+# Validierungs-Regexe
+# Eingaben aus MQTT-Nachrichten werden vor Weiterverarbeitung geprüft,
+# um ungültige IDs oder Befehle gar nicht erst ans Backend zu schicken.
 
 ACTUATOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-SENSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-COMMAND_RE = re.compile(r"^[A-Z0-9_]+$")
+SENSOR_ID_RE   = re.compile(r"^[A-Za-z0-9_-]+$")
+COMMAND_RE     = re.compile(r"^[A-Z0-9_]+$")
+
+# MQTT-Verbindungsparameter
+# Hostname und Port kommen aus Umgebungsvariablen (gesetzt in docker-compose.yml).
+# Benutzername und Passwort werden aus Docker-Secrets gelesen – nie im Code
+# oder in Umgebungsvariablen im Klartext.
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "mosquitto")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", 8883))
 MQTT_USER = open("/run/secrets/mqtt_controller_user").read().strip()
 MQTT_PASS = open("/run/secrets/mqtt_controller_password").read().strip()
 
+# Backend-API-Parameter
+# API_BASE_URL zeigt auf nginx (Reverse Proxy), nicht direkt auf den
+# Zig-Backend-Container. nginx prüft TLS und leitet weiter.
+
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://nginx")
-API_KEY = open("/run/secrets/api_key").read().strip()
+
+# Keycloak-Parameter
+# KEYCLOAK_TOKEN_URL: Endpunkt, an dem der Controller sein Access-Token holt.
+#   Verwendet HTTP (intern, kein TLS nötig zwischen Docker-Containern).
+# CONTROLLER_CLIENT_ID: der in Keycloak angelegte OAuth2-Client "controller-client".
+# CONTROLLER_CLIENT_SECRET_FILE: Pfad zum Docker-Secret mit dem Client-Passwort.
+#   Der Wert im Secret muss "sc_controller_client" sein (aus iot-realm.json).
+
+KEYCLOAK_TOKEN_URL = os.environ.get(
+    "KEYCLOAK_TOKEN_URL",
+    "https://www.lab.local/auth/realms/iot/protocol/openid-connect/token",
+)
+CONTROLLER_CLIENT_ID = os.environ.get("CONTROLLER_CLIENT_ID", "controller-client")
+CONTROLLER_CLIENT_SECRET_FILE = os.environ.get(
+    "CONTROLLER_CLIENT_SECRET_FILE", "/run/secrets/keycloak_controller_secret"
+)
+
+# Token wird TOKEN_REFRESH_MARGIN_SECONDS vor Ablauf neu geholt,
+# damit ein Request der kurz vor dem Ablauf ankommt noch ein gültiges Token hat.
+
+TOKEN_REFRESH_MARGIN_SECONDS = 30
+
+# Wie oft (in Sekunden) Aktor-Befehle und Sensor-Anfragen abgeholt werden.
 
 ACTUATOR_POLL_SECONDS = 2
 
-# Buffer per sensor_id: { sensor_id: { "temperature": (value, timestamp), "humidity": (value, timestamp) } }
+# Metrics-Port (Prometheus scraped). Internal only, app-net.
+METRICS_PORT = int(os.environ.get("METRICS_PORT", 8000))
+
+# Prometheus instruments
+#   controller_actuator_commands_sent_total: incremented after a successful
+#       MQTT publish + ack for an actuator command.
+#   controller_sensor_messages_received_total: incremented on every inbound
+#       MQTT sensor message (one per temperature or humidity reading).
+#   controller_broker_reconnects_total: incremented on every successful
+#       (re)connect after the first one, i.e. broker dropped and came back.
+#   controller_queue_depth: gauge of the number of sensor_id entries in the
+#       pair buffer that have at least one half (temp or humidity) waiting
+#       for its partner. Spikes above ~1 indicate the broker is bursty.
+
+actuator_sent = Counter(
+    "controller_actuator_commands_sent_total",
+    "Actuator commands dispatched to MQTT after a successful ack.",
+    ["actuator_id"],
+)
+sensor_received = Counter(
+    "controller_sensor_messages_received_total",
+    "Sensor data messages received from MQTT.",
+    ["sensor_id"],
+)
+broker_reconnects = Counter(
+    "controller_broker_reconnects_total",
+    "Broker reconnects after the initial connect.",
+)
+queue_depth = Gauge(
+    "controller_queue_depth",
+    "Sensor pair buffer depth (sensor_ids waiting on their partner reading).",
+)
+
+# Sensor-Datenpuffer
+# Temperatur und Luftfeuchtigkeit kommen als separate MQTT-Nachrichten an.
+# Wir puffern beide Werte pro sensor_id und senden erst, wenn beide da sind.
+# Struktur: { "sensor01": { "temperature": (wert, zeitstempel), "humidity": (...) } }
+
 pending = {}
 
-# Maximum age of buffered data - just under the 60s sensor refresh rate.
+# Messwerte die älter als FRESHNESS_SECONDS sind werden verworfen,
+# damit keine veralteten Paare ans Backend geschickt werden.
+# Knapp unter der 60s-Sendeperiode des Sensors.
+
 FRESHNESS_SECONDS = 55
 
 
+# Token-Cache
+# Das Access-Token wird im Speicher gehalten (kein Redis, kein File).
+# Der Cache wird von zwei Threads gelesen und geschrieben:
+#   - dem Haupt-Loop, der drain_actuator_commands / drain_sensor_requests
+#     aufruft (und damit api_get / api_post),
+#   - dem paho MQTT-Network-Thread, der in on_message direkt api_post
+#     für /api/v1/sensor-data aufruft.
+# Ohne Lock können beide gleichzeitig _fetch_token ausführen und sich
+# gegenseitig das frisch geholte Token überschreiben.
+# _token:             das aktuelle JWT-Access-Token als String
+# _token_expires_at:  Unix-Timestamp, ab dem das Token abgelaufen ist
+# _token_lock:        schützt _token und _token_expires_at
+
+_token: str | None = None
+_token_expires_at: float = 0.0
+_token_lock = threading.Lock()
+
+
+def _client_secret() -> str:
+    """Liest das Client-Secret frisch aus dem Docker-Secret-File.
+    Wird bei jedem Token-Fetch aufgerufen, damit ein rotiertes Secret
+    sofort wirksam wird."""
+    return open(CONTROLLER_CLIENT_SECRET_FILE).read().strip()
+
+
+def _fetch_token_locked() -> None:
+    """Holt ein neues Access-Token. Caller muss _token_lock halten.
+
+    Client-Credentials = Maschinenkonto-Flow: kein Benutzer-Login, nur
+    client_id + client_secret. Das Backend prüft dann, ob der Token die
+    Realm-Rolle 'controller-ingest' enthält."""
+    global _token, _token_expires_at
+    body = urllib.parse.urlencode({
+        "grant_type":    "client_credentials",
+        "client_id":     CONTROLLER_CLIENT_ID,
+        "client_secret": _client_secret(),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        KEYCLOAK_TOKEN_URL,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    _token = data["access_token"]
+    expires_in = int(data.get("expires_in", 300))   # Keycloak-Standard: 300s
+    _token_expires_at = time.time() + expires_in
+    print(f"Keycloak: neues Token geholt, gültig für {expires_in}s", flush=True)
+
+
+def _auth_headers() -> dict:
+    """Gibt den Authorization-Header mit dem aktuellen Bearer-Token zurück.
+
+    Holt automatisch ein neues Token, wenn:
+        - noch kein Token vorhanden ist (erster Aufruf nach Start), oder
+        - das Token weniger als TOKEN_REFRESH_MARGIN_SECONDS gültig ist.
+
+    Doppelter Check innerhalb des Locks (double-checked locking): zwei
+    Threads, die gleichzeitig die Abgelaufen-Bedingung sehen, würden
+    sonst beide ein Token holen."""
+    if _token is None or time.time() >= _token_expires_at - TOKEN_REFRESH_MARGIN_SECONDS:
+        with _token_lock:
+            if _token is None or time.time() >= _token_expires_at - TOKEN_REFRESH_MARGIN_SECONDS:
+                _fetch_token_locked()
+    return {"Authorization": f"Bearer {_token}"}
+
+
+def _force_refresh() -> None:
+    """Invalidiert den Token-Cache, damit beim nächsten _auth_headers()-Aufruf
+    zwingend ein neues Token geholt wird.
+
+    Wird bei einem 401-Fehler aufgerufen: das Backend hat den Token abgelehnt
+    (z.B. weil Keycloak ihn zwischenzeitlich revoziert hat)."""
+    global _token, _token_expires_at
+    with _token_lock:
+        _token = None
+        _token_expires_at = 0.0
+
+
+# TLS-Kontext für HTTPS-Requests ans Backend
+
 def api_ssl_context():
+    """Erstellt einen SSL-Kontext, der nur unserer eigenen CA vertraut.
+    Das CA-Zertifikat liegt als Docker-Secret unter /run/secrets/ca_cert.
+    Ohne diesen Schritt würde urllib das selbstsignierte nginx-Zertifikat ablehnen."""
     ctx = ssl.create_default_context()
     ctx.load_verify_locations("/run/secrets/ca_cert")
     return ctx
 
 
+# HTTP-Hilfsfunktionen
+
 def api_post(path, payload):
+    """Sendet einen POST-Request ans Backend mit Bearer-Token-Authentifizierung.
+
+    Fehlerbehandlung:
+        401 → Token könnte revoziert sein → einmalig neues Token holen + Retry
+        403 → Zugriff dauerhaft verweigert (falsche Rolle o.ä.) → Abbruch + Log
+        Alles andere → Exception weiterwerfen (Caller entscheidet)"""
     data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json", "x-api-key": API_KEY}
-    req = urllib.request.Request(
-        f"{API_BASE_URL}{path}",
-        data=data,
-        headers=headers,
-        method="POST",
-    )
-    with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
-        body = response.read().decode("utf-8")
-        return json.loads(body) if body else {}
+
+    def _do_request():
+        # Frische Auth-Header bei jedem Versuch, damit nach _force_refresh()
+        # tatsächlich das neue Token verwendet wird.
+        headers = {"Content-Type": "application/json", **_auth_headers()}
+        req = urllib.request.Request(
+            f"{API_BASE_URL}{path}",
+            data=data,
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+
+    try:
+        return _do_request()
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            print(f"api_post {path}: 401 – Token abgelaufen, einmal wiederholen", flush=True)
+            _force_refresh()
+            return _do_request()   # zweiter Versuch mit frischem Token
+        if e.code == 403:
+            print(f"api_post {path}: 403 Forbidden – Zugriff verweigert, abbrechen", flush=True)
+            raise
+        raise
 
 
 def api_get(path):
-    req = urllib.request.Request(
-        f"{API_BASE_URL}{path}",
-        headers={"x-api-key": API_KEY},
-        method="GET",
-    )
-    with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
-        body = response.read().decode("utf-8")
-        return json.loads(body) if body else {}
+    """Sendet einen GET-Request ans Backend mit Bearer-Token-Authentifizierung.
+
+    Gleiche Fehlerlogik wie api_post: 401 → Retry, 403 → Abbruch."""
+    def _do_request():
+        req = urllib.request.Request(
+            f"{API_BASE_URL}{path}",
+            headers={**_auth_headers()},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, context=api_ssl_context(), timeout=10) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+
+    try:
+        return _do_request()
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            print(f"api_get {path}: 401 – Token abgelaufen, einmal wiederholen", flush=True)
+            _force_refresh()
+            return _do_request()
+        if e.code == 403:
+            print(f"api_get {path}: 403 Forbidden – Zugriff verweigert, abbrechen", flush=True)
+            raise
+        raise
+
+
+# MQTT-Callbacks
+
+_connected_once = False
 
 
 def on_connect(client, userdata, flags, rc, properties=None):
+    """Wird aufgerufen, sobald die MQTT-Verbindung steht (oder fehlschlägt).
+    rc == 0 bedeutet Erfolg. Bei Erfolg abonnieren wir das Sensor-Datentopic.
+    Jeder erneute erfolgreiche Connect nach dem ersten zählt als reconnect."""
+    global _connected_once
     if rc == 0:
         print("Connected to broker", flush=True)
+        if _connected_once:
+            broker_reconnects.inc()
+        _connected_once = True
         client.subscribe("sensor01/data")
     else:
         print(f"Broker connection failed: rc={rc}", flush=True)
 
 
 def on_message(client, userdata, msg):
+    """Wird für jede eingehende MQTT-Nachricht aufgerufen.
 
+    Ablauf:
+        1. JSON parsen, Wert und Einheit extrahieren
+        2. Plausibilitätsprüfung (Wertebereich)
+        3. Wert im pending-Buffer speichern
+        4. Sobald Temperatur UND Luftfeuchtigkeit für einen Sensor vorhanden
+            und frisch genug sind → gemeinsam ans Backend senden
+        5. Buffer nach dem Senden (oder bei Fehler) leeren"""
     try:
         payload = json.loads(msg.payload.decode())
-        value = float(payload["value"])
-        unit = str(payload.get("unit", ""))
-        sensor_id = msg.topic.split("/")[0]
+        value     = float(payload["value"])
+        unit      = str(payload.get("unit", ""))
+        sensor_id = msg.topic.split("/")[0]  # "sensor01" aus "sensor01/data"
 
-        # Range checks before buffering.
+        sensor_received.labels(sensor_id=sensor_id).inc()
+
+        # Wertebereich prüfen, bevor wir puffern.
         if unit == "C":
             if not (-40 <= value <= 80):
                 print(f"Temperatur außerhalb der Range für {sensor_id}: {value}", flush=True)
@@ -84,7 +320,7 @@ def on_message(client, userdata, msg):
             if sensor_id not in pending:
                 pending[sensor_id] = {}
             pending[sensor_id]["temperature"] = (value, datetime.now(timezone.utc))
-        
+
         elif unit == "%":
             if not (0 <= value <= 100):
                 print(f"Luftfeuchtigkeit außerhalb der Range für {sensor_id}: {value}", flush=True)
@@ -92,99 +328,159 @@ def on_message(client, userdata, msg):
             if sensor_id not in pending:
                 pending[sensor_id] = {}
             pending[sensor_id]["humidity"] = (value, datetime.now(timezone.utc))
-        
+
         else:
             print(f"Unbekannte Einheit: {unit}", flush=True)
             return
 
         buf = pending.get(sensor_id, {})
 
-        # Forward to server.js only when both values are present.
+        # Noch nicht beide Werte → warten auf die zweite Nachricht.
         if "temperature" not in buf or "humidity" not in buf:
             return
-        
+
         temp_val, temp_time = buf["temperature"]
-        hum_val, hum_time = buf["humidity"]
+        hum_val,  hum_time  = buf["humidity"]
         now = datetime.now(timezone.utc)
 
-        # Freshness check: discard outdated data.
+        # Frische prüfen: Wenn ein Wert zu alt ist, ist das Paar nicht mehr
+        # konsistent. Buffer leeren und auf neue Werte warten.
         temp_age = (now - temp_time).total_seconds()
-        hum_age = (now - hum_time).total_seconds()
+        hum_age  = (now - hum_time).total_seconds()
 
         if temp_age > FRESHNESS_SECONDS or hum_age > FRESHNESS_SECONDS:
-            print(f"Veraltete Daten für {sensor_id} (temp: {temp_age:.0f}s, hum: {hum_age:.0f}s), verwerfe Buffer", flush=True)
+            print(
+                f"Veraltete Daten für {sensor_id} "
+                f"(temp: {temp_age:.0f}s, hum: {hum_age:.0f}s), verwerfe Buffer",
+                flush=True,
+            )
             pending.pop(sensor_id, None)
             return
-        
-        timestamp = now.isoformat()
 
         try:
-            result = api_post(
-                "/api/internal/sensordata",
-                {
-                    "sensor_id": sensor_id,
-                    "temperature": temp_val,
-                    "humidity": hum_val,
-                    "timestamp": timestamp,
-                },
+            # Beide Werte vorhanden und frisch → zwei POSTs ans Backend.
+            # Das Schema in sensor_data ist eine Zeile pro Messwert mit
+            # (sensor_id, value, unit); der Zig-Handler akzeptiert genau
+            # diese Form. Temperatur und Luftfeuchtigkeit gehen daher als
+            # zwei separate Rows raus. recorded_at wird vom Server (NOW())
+            # gesetzt, daher kein timestamp-Feld im Body.
+            api_post(
+                "/api/v1/sensor-data",
+                {"sensor_id": sensor_id, "value": temp_val, "unit": "C"},
             )
-            print(f"Gespeichert: {sensor_id}: temp={temp_val} hum={hum_val} → {result}", flush=True)
+            api_post(
+                "/api/v1/sensor-data",
+                {"sensor_id": sensor_id, "value": hum_val, "unit": "%"},
+            )
+            print(f"Gespeichert: {sensor_id}: temp={temp_val} hum={hum_val}", flush=True)
         except urllib.error.HTTPError as e:
-                print(f"HTTP-Fehler: {e.code}: {e.read().decode()}", flush=True)
+            print(f"HTTP-Fehler: {e.code}: {e.read().decode()}", flush=True)
         except Exception as e:
-                print(f"Fehler beim Senden der Daten: {e}", flush=True)
+            print(f"Fehler beim Senden der Daten: {e}", flush=True)
         finally:
+            # Buffer in jedem Fall leeren (Erfolg oder Fehler),
+            # damit keine Altdaten das nächste Paar verfälschen.
             pending.pop(sensor_id, None)
 
     except Exception as e:
         print(f"Fehler beim Verarbeiten der Nachricht: {e}", flush=True)
+    finally:
+        # Gauge nach jedem on_message neu setzen — billig genug für 2 msg/min.
+        queue_depth.set(len(pending))
 
+
+# Drain-Funktionen
 
 def drain_actuator_commands(client):
-    data = api_get("/api/internal/actuator-commands")
+    """Holt alle offenen Aktor-Befehle vom Backend und publiziert sie per MQTT.
+
+    Das Backend schreibt Befehle in eine DB-Tabelle. Der Controller pollt diese
+    alle ACTUATOR_POLL_SECONDS Sekunden, sendet jeden Befehl per MQTT und
+    markiert ihn dann als gesendet (sent_at wird gesetzt).
+
+    Ungültige IDs oder Befehle werden übersprungen und sofort als gesendet
+    markiert, damit sie nicht ewig in der Queue bleiben."""
+    data = api_get("/api/v1/actuator-commands")
     rows = data.get("commands", [])
     for row in rows:
-        row_id = row["id"]
+        row_id     = row["id"]
         actuator_id = row["actuator_id"]
-        command = row["command"]
+        command    = row["command"]
+
+        # Eingabe validieren bevor sie als MQTT-Topic oder Payload verwendet wird.
         if not ACTUATOR_ID_RE.match(actuator_id) or not COMMAND_RE.match(command):
-            print(f"actuator skipped invalid row id={row_id}: actuator_id={actuator_id!r} command={command!r}", flush=True)
-            api_post("/api/internal/actuator-commands/sent", {"id": row_id})
+            print(
+                f"actuator skipped invalid row id={row_id}: "
+                f"actuator_id={actuator_id!r} command={command!r}",
+                flush=True,
+            )
+            api_post("/api/v1/actuator-commands/sent", {"id": row_id})
             continue
-        topic = f"{actuator_id}/data"
+
+        topic   = f"{actuator_id}/data"
         payload = json.dumps({"command": command})
-        info = client.publish(topic, payload, qos=1)
+        info    = client.publish(topic, payload, qos=1)
         info.wait_for_publish(timeout=5)
+
         if not info.is_published():
+            # MQTT-Publish fehlgeschlagen → nicht als gesendet markieren,
+            # damit der nächste Poll-Durchlauf es erneut versucht.
             print(f"actuator publish failed: id={row_id}", flush=True)
             continue
-        api_post("/api/internal/actuator-commands/sent", {"id": row_id})
+
+        # Erst nach erfolgreichem MQTT-Publish als gesendet markieren.
+        api_post("/api/v1/actuator-commands/sent", {"id": row_id})
+        actuator_sent.labels(actuator_id=actuator_id).inc()
         print(f"actuator sent: {actuator_id} <- {command} (id={row_id})", flush=True)
 
 
 def drain_sensor_requests(client):
-    data = api_get("/api/internal/sensor-requests")
+    """Holt alle offenen Sensor-Anfragen vom Backend und publiziert sie per MQTT.
+
+    Gleiche Drain-Logik wie drain_actuator_commands, nur für das
+    sensor-requests-Topic (z.B. "sensor01/request" mit Befehl "READ_NOW")."""
+    data = api_get("/api/v1/sensor-requests")
     rows = data.get("requests", [])
     for row in rows:
-        row_id = row["id"]
+        row_id    = row["id"]
         sensor_id = row["sensor_id"]
-        command = row["command"]
+        command   = row["command"]
+
         if not SENSOR_ID_RE.match(sensor_id) or not COMMAND_RE.match(command):
-            print(f"sensor-request skipped invalid row id={row_id}: sensor_id={sensor_id!r} command={command!r}", flush=True)
-            api_post("/api/internal/sensor-requests/sent", {"id": row_id})
+            print(
+                f"sensor-request skipped invalid row id={row_id}: "
+                f"sensor_id={sensor_id!r} command={command!r}",
+                flush=True,
+            )
+            api_post("/api/v1/sensor-requests/sent", {"id": row_id})
             continue
-        topic = f"{sensor_id}/request"
+
+        topic   = f"{sensor_id}/request"
         payload = json.dumps({"command": command})
-        info = client.publish(topic, payload, qos=1)
+        info    = client.publish(topic, payload, qos=1)
         info.wait_for_publish(timeout=5)
+
         if not info.is_published():
             print(f"sensor-request publish failed: id={row_id}", flush=True)
             continue
-        api_post("/api/internal/sensor-requests/sent", {"id": row_id})
+
+        api_post("/api/v1/sensor-requests/sent", {"id": row_id})
         print(f"sensor-request sent: {sensor_id} <- {command} (id={row_id})", flush=True)
 
 
+# Einstiegspunkt
+
 def main():
+    """Startet den Controller:
+        1. TLS-Kontext für MQTT aufbauen (gleiche CA wie für HTTPS)
+        2. MQTT-Client konfigurieren und verbinden
+        3. MQTT-Loop im Hintergrund starten (on_message läuft in eigenem Thread)
+        4. Haupt-Loop: alle ACTUATOR_POLL_SECONDS Aktor-Befehle und
+            Sensor-Anfragen drainagen"""
+    # Prometheus scrape endpoint. Bound on every interface inside the
+    # container; only reachable via app-net (no host port published).
+    start_http_server(METRICS_PORT)
+
     tls_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     tls_ctx.load_verify_locations("/run/secrets/ca_cert")
 
@@ -195,7 +491,7 @@ def main():
     client.on_message = on_message
 
     client.connect(MQTT_HOST, MQTT_PORT)
-    client.loop_start()
+    client.loop_start()  # startet einen Background-Thread für MQTT I/O
 
     while True:
         try:

@@ -2,6 +2,18 @@
 
 Dieses Dokument beschreibt, was ich auf dem 16-GB-Raspberry-Pi-5 gebaut habe, wie es entstanden ist, wie man es einrichtet, und was noch fehlt.
 
+> **Phase 6 Update.** Dieses Dokument erzählt den Bau-Verlauf bis Phase 4. Phase 6 hat den Stack an mehreren Stellen umgebaut; die einzelnen Schritte unten sind weiterhin historisch korrekt, aber die heutige Wahrheit steht in den fett markierten Verweisen:
+>
+> - **Auth** ([keycloak-integration.md](keycloak-integration.md), [api.md](api.md)). Die ursprüngliche HS256-JWT-Auth (`/auth/login`, `dashboard_users`-Tabelle, `issueToken`/`validateBearer`, `src/handlers/login.zig`) wurde durch Keycloak (Realm `iot`) ersetzt. Backend prüft RS256-Signaturen gegen das JWKS-Endpoint und gleicht pro Route Audience und Realm-Rolle ab.
+> - **Controller** ([controller.md](controller.md)). Der `x-api-key`-Pfad zu `server.js` ist weg. Controller spricht heute direkt mit dem Zig-Backend per Keycloak Client-Credentials (`controller-client`/`controller-ingest`).
+> - **server.js raus** ([api.md](api.md)). Der Node-Webserver ist gelöscht; nginx routet nur noch `/api/v1/*` zum Zig-Backend.
+> - **LSTM** ([lstm.md](lstm.md)). Eigener Service, Client-Credentials gegen Keycloak (`lstm-client`/`lstm-control`).
+> - **Frontend** ([../frontend/frontend.md](../frontend/frontend.md)). Statisches SPA unter `docker/dashboard/`, Keycloak-OIDC im Browser, Backend-Calls mit Bearer Token.
+> - **Observability** ([observability.md](observability.md), [grafana.md](grafana.md)). Prometheus + Grafana, OIDC-Login für Grafana, fünf Scrape-Targets, sechs provisionierte Dashboards.
+> - **Schemas** (`docker/postgres/init.sql`, `migrate.sql`). Neue Rollen `postgres_exporter_user` + `grafana_read_user`, CHECK-Constraints auf `sensor_id`/`unit`/`command`, `dashboard_users` ist gedroppt.
+>
+> Die Schritte 6 und 8 unten beschreiben den historischen Phase-4-Stand.
+
 ---
 
 ## Überblick
@@ -120,13 +132,14 @@ Pico → MQTT/TLS (sensor01/data) → mosquitto → controller.py → INSERT sen
 
 **Dashboard lesen:**
 ```
-Browser → HTTPS → nginx → GET /api/v1/sensor-data → backend (JWT-Check) → SELECT → postgres
+Browser → Keycloak Authorization-Code-Flow → Access-Token (dashboard-client)
+Browser → HTTPS → nginx → GET /api/v1/sensor-data → backend (RS256-Check + aud/role) → SELECT → postgres
 ```
 
-**Aktor-Befehl:**
+**Aktor-Befehl (LSTM oder Operator):**
 ```
-Browser → POST /auth/login → JWT
-Browser → POST /api/v1/actuator-command → backend (JWT-Check) → INSERT actuator_commands
+Service → POST Keycloak Token-Endpoint (client-credentials, lstm-client) → Access-Token
+Service → POST /api/v1/actuator-command → backend (RS256-Check, aud=lstm-client, role=lstm-control) → INSERT actuator_commands
 controller.py (pollt alle 2s) → MQTT publish actuator01/data → mosquitto → Pico
 ```
 
@@ -134,7 +147,7 @@ controller.py (pollt alle 2s) → MQTT publish actuator01/data → mosquitto →
 
 **Fail-Secure Defaults:**
 - nginx gibt 502 zurück wenn der Backend-Container down ist — kein unsicherer Fallback
-- JWT-Validierung gibt bei jedem Fehler (fehlendes Header, falsche Signatur, abgelaufen) 401 zurück — kein Code-Pfad lässt eine Anfrage bei Fehler durch
+- Keycloak-Token-Validierung gibt bei fehlendem `Authorization`-Header 401 und bei Signatur-, Issuer-, Audience-, Ablauf- oder Rollen-Fehler 403 zurück. Es gibt keinen Code-Pfad, der eine Anfrage trotz Verifikationsfehler durchlässt.
 - MQTT-Broker lehnt die Verbindung bei fehlgeschlagener Auth komplett ab
 - DB-Fehler in einem Handler → Fehlerantwort, nie stille Teildaten
 
@@ -142,19 +155,19 @@ controller.py (pollt alle 2s) → MQTT publish actuator01/data → mosquitto →
 Sicherheit wird auf mehreren unabhängigen Ebenen durchgesetzt — eine umgangene Schicht reicht nicht aus:
 1. nftables auf dem WLAN-AP — nur Production-WLAN-Traffic kommt überhaupt ins Netz
 2. nginx Subnet-Whitelist + Rate Limiting — schränkt weiter ein, welche Hosts welche Pfade erreichen
-3. JWT-Validierung auf jedem `/api/`-Endpunkt — pro Request, nicht pro Session
+3. Keycloak-Token-Validierung auf jedem `/api/v1/`-Endpunkt inklusive Audience- und Realm-Rollen-Check pro Route — pro Request, nicht pro Session
 4. DB-User mit minimalen Rechten — selbst bei vollständiger Kompromittierung des Backend-Prozesses kein DROP/ALTER möglich
 5. Docker-Netzwerk-Isolation — Sensor-seitige Container haben keine Route zu postgres
 6. MQTT-ACL — kompromittierte Sensor-Credentials können keine anderen Sensor-Daten lesen oder Aktor-Topics beschreiben
 
 **Least Privilege:**
 - `iot_write_user`: nur `INSERT`/`SELECT` auf `sensor_data` und `actuator_commands`
-- `iot_read_user`: nur `SELECT` auf `sensor_data` und `dashboard_users`
+- `iot_read_user`: nur `SELECT` auf `sensor_data` und `sensor_data_archive`
 - MQTT-ACL: ein Topic pro Sensor, pro Sensor eigene Credentials
 
 **Complete Mediation:**
 - nginx prüft jeden eingehenden Request (Rate Limiting, Subnet-Whitelist)
-- JWT-Validierung auf jedem `/api/`-Endpunkt
+- Keycloak-Token-Validierung auf jedem `/api/v1/`-Endpunkt
 
 **Least Common Mechanism:**
 - Jeder Container im eigenen Netzwerksegment
@@ -236,7 +249,8 @@ chmod 700 ~/API-Rpi16GB/docker/secrets
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_write_password.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/db_read_password.txt
-echo "$(openssl rand -base64 48)" > ~/API-Rpi16GB/docker/secrets/jwt_secret.txt
+touch ~/API-Rpi16GB/docker/secrets/keycloak_lstm_secret.txt
+touch ~/API-Rpi16GB/docker/secrets/keycloak_controller_secret.txt
 echo "controller"                 > ~/API-Rpi16GB/docker/secrets/mqtt_controller_user.txt
 echo "$(openssl rand -base64 24)" > ~/API-Rpi16GB/docker/secrets/mqtt_controller_password.txt
 
@@ -245,7 +259,7 @@ chmod 600 ~/API-Rpi16GB/docker/secrets/*.txt
 
 ### 9 — TLS-Zertifikate erzeugen
 
-Erzeugt eine lokale CA, signiert ein Zertifikat für nginx (`backend.lab.local`) und eines für den MQTT Broker:
+Erzeugt eine lokale CA, signiert ein Zertifikat für nginx (`www.lab.local`) und eines für den MQTT Broker:
 
 ```sh
 cd ~/API-Rpi16GB
@@ -341,18 +355,9 @@ curl -k 'https://backend-server.local/api/v1/sensor-data?x=<script>'
 
 ## API
 
-Basis-URL: `https://backend-server.local`
+Basis-URL: `https://www.lab.local`
 
-Alle `/api/`-Endpunkte brauchen `Authorization: Bearer <token>`.
-
-### POST /auth/login
-
-```json
-{ "username": "admin", "password": "changeme" }
-```
-
-Antwort 200: `{"token": "<jwt>"}` — gültig 24 Stunden  
-Antwort 401: `{"error": "unauthorized"}`
+Alle `/api/v1/`-Endpunkte brauchen `Authorization: Bearer <token>` mit einem RS256-Access-Token aus Keycloak (Realm `iot`). Pro Route gilt zusätzlich eine Audience- und Realm-Rollen-Policy — siehe [api.md](api.md) für die komplette Matrix. Tokens werden direkt bei Keycloak geholt (Dashboard via Authorization-Code-Flow, LSTM und Controller via Client-Credentials-Flow); das Backend stellt selbst keine Tokens aus.
 
 ### GET /health
 
@@ -360,13 +365,15 @@ Kein Auth nötig. Antwort 200: `{"status": "ok"}`
 
 ### GET /api/v1/sensor-data
 
-Alle Messwerte, neueste zuerst.
+Audience `dashboard-client`, Rolle `dashboard-user`. Optional `?from=<iso>&to=<iso>` für Zeitraum-Filterung.
 
 ```json
 [{ "id": 1, "sensor_id": "sensor01", "value": 23.4, "unit": "°C", "recorded_at": "2026-04-24T10:00:00Z" }]
 ```
 
 ### POST /api/v1/sensor-data
+
+Audience `controller-client`, Rolle `controller-ingest`.
 
 ```json
 { "sensor_id": "sensor01", "value": 23.4, "unit": "°C" }
@@ -376,8 +383,10 @@ Antwort 201: `{"created": true}`
 
 ### POST /api/v1/actuator-command
 
+Audience `lstm-client`, Rolle `lstm-control`.
+
 ```json
-{ "actuator_id": "actuator01", "command": "on" }
+{ "actuator_id": "actuator01", "command": "on", "issued_by": "machine" }
 ```
 
 Antwort 201: `{"queued": true}` — controller.py liefert den Befehl innerhalb ~2s per MQTT
@@ -399,13 +408,10 @@ CREATE TABLE actuator_commands (
     id          BIGSERIAL    PRIMARY KEY,
     actuator_id VARCHAR(64)  NOT NULL,
     command     VARCHAR(64)  NOT NULL,
+    issued_by   VARCHAR(16)  NOT NULL DEFAULT 'user',  -- 'user' | 'machine'
     issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     sent_at     TIMESTAMPTZ           -- NULL bis controller.py den Befehl abgesendet hat
 );
-
-CREATE TABLE dashboard_users (
-    id              BIGSERIAL    PRIMARY KEY,
-    username        VARCHAR(64)  UNIQUE NOT NULL,
-    password_sha256 CHAR(64)     NOT NULL
-);
 ```
+
+Die Tabelle `dashboard_users` aus Phase 4 ist seit Phase 6 entfernt; Benutzeridentität lebt vollständig in Keycloak. `docker/postgres/migrate.sql` enthält `DROP TABLE IF EXISTS dashboard_users` für den Live-Pi.

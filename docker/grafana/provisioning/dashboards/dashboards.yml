@@ -1,0 +1,24 @@
+# Dashboard provisioning. Grafana scans the listed folder on startup and
+# every `updateIntervalSeconds`. Files dropped under ./dashboards/ that
+# match *.json become Dashboards in the configured folder.
+#
+# The canonical version of every dashboard lives in git. Both flags here
+# enforce that: allowUiUpdates: false rejects in-UI edits (the Save button
+# greys out, no surprise drift), disableDeletion: true prevents an admin
+# from accidentally removing a provisioned dashboard from the list.
+# Anyone who needs to change a panel edits the JSON, opens a PR, and the
+# next provisioner refresh picks it up.
+
+apiVersion: 1
+
+providers:
+  - name: 'API-Rpi16GB'
+    orgId: 1
+    folder: 'API-Rpi16GB'
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

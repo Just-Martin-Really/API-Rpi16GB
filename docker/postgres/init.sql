@@ -1,11 +1,17 @@
 -- Runs once on first container start against the 'sensor' database.
 
+-- CHECK constraints below mirror the app-layer regexes in controller.py
+-- (ACTUATOR_ID_RE / SENSOR_ID_RE / COMMAND_RE) so a row that bypasses the
+-- API (psql, future scripts, accidental seeder drift) still fails fast.
 CREATE TABLE IF NOT EXISTS sensor_data (
     id          BIGSERIAL        PRIMARY KEY,
     sensor_id   VARCHAR(64)      NOT NULL,
     value       DOUBLE PRECISION NOT NULL,
     unit        VARCHAR(16)      NOT NULL,
-    recorded_at TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+    recorded_at TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_sensor_data_sensor_id CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_sensor_data_unit      CHECK (unit IN ('C', '%'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_data_sensor_id   ON sensor_data (sensor_id);
@@ -14,11 +20,13 @@ CREATE INDEX IF NOT EXISTS idx_sensor_data_recorded_at ON sensor_data (recorded_
 -- Users are created without passwords here (safe to commit).
 -- Passwords are set after first start via set_passwords.sh — never stored in the repo.
 
--- Write user: used by the backend to ingest sensor readings
+-- Write user: used by the backend to ingest sensor readings.
+-- No UPDATE on sensor_data: ingest only inserts, archive only deletes;
+-- rewriting historical readings should not be reachable from the API.
 CREATE USER iot_write_user;
 GRANT CONNECT ON DATABASE sensor TO iot_write_user;
 GRANT USAGE  ON SCHEMA public TO iot_write_user;
-GRANT SELECT, INSERT, UPDATE ON TABLE sensor_data TO iot_write_user;
+GRANT SELECT, INSERT ON TABLE sensor_data TO iot_write_user;
 GRANT USAGE, SELECT ON SEQUENCE sensor_data_id_seq TO iot_write_user;
 
 -- Read user: used by the dashboard / reporting endpoints
@@ -26,27 +34,6 @@ CREATE USER iot_read_user;
 GRANT CONNECT ON DATABASE sensor TO iot_read_user;
 GRANT USAGE  ON SCHEMA public TO iot_read_user;
 GRANT SELECT ON TABLE sensor_data TO iot_read_user;
-
--- Dashboard users table (login credentials for the web dashboard)
-CREATE TABLE IF NOT EXISTS dashboard_users (
-    id              SERIAL       PRIMARY KEY,
-    username        VARCHAR(64)  UNIQUE NOT NULL,
-    password_sha256 CHAR(64)     NOT NULL
-);
-
--- Default seed users. Passwords are 'changeme'; update via set_passwords.sh
--- or SQL before going live:
---   UPDATE dashboard_users SET password_sha256 = encode(sha256('newpw'::bytea), 'hex')
---   WHERE username = 'admin';
--- 'admin' is the dashboard operator. 'lstm' is the LSTM control loop service
--- account; the loop logs in via /auth/login to obtain a JWT.
-INSERT INTO dashboard_users (username, password_sha256)
-VALUES
-    ('admin', encode(sha256('changeme'::bytea), 'hex')),
-    ('lstm',  encode(sha256('changeme'::bytea), 'hex'))
-ON CONFLICT DO NOTHING;
-
-GRANT SELECT ON TABLE dashboard_users TO iot_read_user;
 
 -- Actuator commands written by the dashboard or by automated controllers,
 -- consumed by controller.py. issued_by distinguishes the source.
@@ -59,7 +46,11 @@ CREATE TABLE IF NOT EXISTS actuator_commands (
     sent_at     TIMESTAMPTZ,
 
     CONSTRAINT chk_actuator_commands_issued_by
-        CHECK (issued_by IN ('user', 'machine'))
+        CHECK (issued_by IN ('user', 'machine')),
+    CONSTRAINT chk_actuator_commands_actuator_id
+        CHECK (actuator_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_actuator_commands_command
+        CHECK (command ~ '^[A-Z0-9_]+$')
 );
 
 CREATE INDEX IF NOT EXISTS idx_actuator_commands_unsent
@@ -76,7 +67,12 @@ CREATE TABLE IF NOT EXISTS sensor_requests (
     sensor_id   VARCHAR(64)  NOT NULL,
     command     VARCHAR(64)  NOT NULL,
     issued_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    sent_at     TIMESTAMPTZ
+    sent_at     TIMESTAMPTZ,
+
+    CONSTRAINT chk_sensor_requests_sensor_id
+        CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_sensor_requests_command
+        CHECK (command ~ '^[A-Z0-9_]+$')
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_requests_unsent
@@ -93,7 +89,12 @@ CREATE TABLE IF NOT EXISTS sensor_data_archive (
     value       DOUBLE PRECISION NOT NULL,
     unit        VARCHAR(16)      NOT NULL,
     recorded_at TIMESTAMPTZ      NOT NULL,
-    archived_at TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+    archived_at TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_sensor_data_archive_sensor_id
+        CHECK (sensor_id ~ '^[A-Za-z0-9_-]+$'),
+    CONSTRAINT chk_sensor_data_archive_unit
+        CHECK (unit IN ('C', '%'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_archive_sensor_id   ON sensor_data_archive (sensor_id);
@@ -104,3 +105,21 @@ CREATE INDEX IF NOT EXISTS idx_archive_archived_at ON sensor_data_archive (archi
 GRANT DELETE ON TABLE sensor_data TO iot_write_user;
 GRANT SELECT, INSERT, DELETE ON TABLE sensor_data_archive TO iot_write_user;
 GRANT SELECT ON TABLE sensor_data_archive TO iot_read_user;
+
+-- Prometheus exporter user: read-only, used by postgres_exporter to publish
+-- DB-level metrics (connections, transactions, table sizes, replication lag).
+-- pg_monitor is the canonical role for this purpose; it grants SELECT on
+-- pg_stat_* views without giving access to row data.
+CREATE USER postgres_exporter_user;
+GRANT CONNECT ON DATABASE sensor TO postgres_exporter_user;
+GRANT pg_monitor TO postgres_exporter_user;
+
+-- Grafana read-only user: used by the Postgres datasource in Grafana to
+-- query sensor_data and sensor_data_archive for the "Sensor-Daten" dashboard.
+-- Kept distinct from iot_read_user so its credentials can be rotated
+-- independently and so it cannot accidentally be granted write access.
+CREATE USER grafana_read_user;
+GRANT CONNECT ON DATABASE sensor TO grafana_read_user;
+GRANT USAGE ON SCHEMA public TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data TO grafana_read_user;
+GRANT SELECT ON TABLE sensor_data_archive TO grafana_read_user;

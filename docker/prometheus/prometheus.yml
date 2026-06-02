@@ -1,0 +1,59 @@
+# Prometheus scrape configuration for the API-Rpi16GB stack.
+#
+# Targets reachable via Docker DNS on app-net are addressed by service name.
+# node_exporter runs on the host network namespace so it is reached via
+# host.docker.internal (mapped to host-gateway in docker-compose.yml).
+#
+# This file is mounted read-only into the prometheus container at
+# /etc/prometheus/prometheus.yml. Reload by restarting the container or by
+# sending SIGHUP to the prometheus process.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: lab
+    pi: rpi16gb
+
+scrape_configs:
+  # Prometheus self-monitoring.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Zig backend. /metrics is unauthenticated by design (Prometheus has no JWT
+  # client). Reachable on app-net via the service hostname.
+  - job_name: backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8080"]
+
+  # LSTM control loop. prometheus_client.start_http_server(8000) inside
+  # control_loop.py exposes the standard registry.
+  - job_name: lstm
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["lstm:8000"]
+
+  # Controller. prometheus_client.start_http_server(METRICS_PORT) inside
+  # controller.py exposes counters for actuator-command dispatches,
+  # inbound sensor messages, broker reconnects, and pair-buffer depth.
+  - job_name: controller
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["controller:8000"]
+
+  # Sensor database. postgres_exporter_user is created in init.sql with the
+  # pg_monitor role; see docs/backend/observability.md for the password
+  # bootstrap.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres_exporter:9187"]
+
+  # Pi host metrics (CPU, RAM, disk, temperature). node_exporter binds on the
+  # host network namespace; host.docker.internal resolves to host-gateway
+  # thanks to extra_hosts on the prometheus service.
+  - job_name: node
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
