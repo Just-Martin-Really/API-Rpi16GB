@@ -10,7 +10,6 @@
     <link rel="stylesheet" href="style/style.css">
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="alternate icon" href="favicon.ico">
-    <script>(function(){var t=localStorage.getItem("theme")||"light";document.documentElement.setAttribute("data-bs-theme",t);}());</script>
 </head>
 <body class="bg-light">
 
@@ -28,9 +27,6 @@
                     <span class="fw-semibold">IoT Lab Control Center</span>
                 </a>
                 <div class="d-flex align-items-center">
-                    <button id="theme-btn" class="btn btn-outline-light btn-sm me-2" title="Farbmodus wechseln">
-                        <i id="theme-icon" class="bi bi-moon-stars-fill"></i>
-                    </button>
                     <div class="text-light me-3 small d-none d-sm-block">
                         <i class="bi bi-person-circle me-1"></i>
                         <span id="username" class="fw-medium">Loading...</span>
@@ -221,8 +217,6 @@
                 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 text-muted small">
                     <div class="d-flex align-items-center gap-3 flex-wrap">
                         <span><i class="bi bi-cpu me-1 text-primary"></i><strong>IoT Lab Control Center</strong></span>
-                        <span class="d-none d-sm-inline text-muted">·</span>
-                        <span>Raspberry Pi 5 &nbsp;·&nbsp; Zig Backend &nbsp;·&nbsp; Keycloak OIDC</span>
                     </div>
                     <div class="d-flex align-items-center gap-3 flex-wrap">
                         <a href="https://www.lab.local/grafana/" target="_blank" class="text-muted text-decoration-none">

@@ -41,8 +41,6 @@ const dom = {
   statusText:    document.getElementById("status-text"),
   statusTime:    document.getElementById("status-time"),
   statusBadge:   document.getElementById("status-badge"),
-  themeBtn:      document.getElementById("theme-btn"),
-  themeIcon:     document.getElementById("theme-icon"),
   readingsTbody: document.getElementById("readings-tbody"),
   tableCount:    document.getElementById("table-count"),
 };
@@ -164,20 +162,6 @@ function setupUI() {
     });
   });
 
-  // Dark mode toggle — syncs icon with the current theme (set early by the
-  // inline script in <head>) and persists the choice to localStorage.
-  const syncThemeIcon = (theme) => {
-    dom.themeIcon.className = theme === "dark" ? "bi bi-sun-fill" : "bi bi-moon-stars-fill";
-  };
-  syncThemeIcon(document.documentElement.getAttribute("data-bs-theme") || "light");
-
-  dom.themeBtn.addEventListener("click", () => {
-    const current = document.documentElement.getAttribute("data-bs-theme") || "light";
-    const next = current === "dark" ? "light" : "dark";
-    document.documentElement.setAttribute("data-bs-theme", next);
-    localStorage.setItem("theme", next);
-    syncThemeIcon(next);
-  });
 }
 
 function prefillDefaultTimeRange() {
