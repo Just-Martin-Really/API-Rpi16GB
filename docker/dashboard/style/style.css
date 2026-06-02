@@ -218,6 +218,17 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
 }
 
 
+/* Footer */
+
+footer {
+  background: transparent;
+}
+
+footer a:hover {
+  color: var(--color-temp) !important;
+}
+
+
 /* Dark mode */
 
 [data-bs-theme="dark"] body::before {

@@ -43,6 +43,8 @@ const dom = {
   statusBadge:   document.getElementById("status-badge"),
   themeBtn:      document.getElementById("theme-btn"),
   themeIcon:     document.getElementById("theme-icon"),
+  readingsTbody: document.getElementById("readings-tbody"),
+  tableCount:    document.getElementById("table-count"),
 };
 
 // Module-wide state.
@@ -466,6 +468,7 @@ function renderChart(points, append) {
   }
   chart.update();
   updateKpiCards(points);
+  updateTable(points);
 }
 
 function updateKpiCards(points) {
@@ -473,6 +476,26 @@ function updateKpiCards(points) {
   const last = points[points.length - 1];
   if (last.temperature !== null) dom.kpiTemp.textContent = last.temperature.toFixed(1);
   if (last.humidity    !== null) dom.kpiHum.textContent  = last.humidity.toFixed(1);
+}
+
+function updateTable(points) {
+  const ROWS = 10;
+  dom.tableCount.textContent = `${points.length} Einträge`;
+
+  if (!points.length) {
+    dom.readingsTbody.innerHTML =
+      '<tr><td colspan="3" class="text-center text-muted py-4 small">' +
+      '<i class="bi bi-inbox me-1"></i> Keine Daten im gewählten Zeitraum</td></tr>';
+    return;
+  }
+
+  const rows = points.slice(-ROWS).reverse();
+  dom.readingsTbody.innerHTML = rows.map((p) => `
+    <tr>
+      <td class="px-4 py-2 text-muted small">${new Date(p.t).toLocaleString("de-DE")}</td>
+      <td class="px-4 py-2 fw-medium" style="color:var(--color-temp)">${p.temperature !== null ? p.temperature.toFixed(1) : "—"}</td>
+      <td class="px-4 py-2 fw-medium" style="color:var(--color-humidity)">${p.humidity !== null ? p.humidity.toFixed(1) : "—"}</td>
+    </tr>`).join("");
 }
 
 function updateStatus(online, count, isLive) {

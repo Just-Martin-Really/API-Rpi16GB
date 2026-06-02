@@ -175,7 +175,68 @@
                 </div>
 
             </div>
+
+            <!-- Last readings table -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <div class="card border-0 shadow-sm rounded-3">
+                        <div class="card-header bg-transparent border-0 pt-3 px-4 d-flex align-items-center justify-content-between">
+                            <h6 class="mb-0 fw-semibold">
+                                <i class="bi bi-table me-2 text-primary"></i>Letzte Messwerte
+                            </h6>
+                            <span class="badge bg-secondary rounded-pill" id="table-count">0 Einträge</span>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover table-sm align-middle mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th class="px-4 py-2 text-muted small fw-semibold">Zeitstempel</th>
+                                            <th class="px-4 py-2 text-muted small fw-semibold">
+                                                <i class="bi bi-thermometer-half text-primary me-1"></i>Temperatur (°C)
+                                            </th>
+                                            <th class="px-4 py-2 text-muted small fw-semibold">
+                                                <i class="bi bi-droplet-half text-warning me-1"></i>Luftfeuchte (%)
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="readings-tbody">
+                                        <tr>
+                                            <td colspan="3" class="text-center text-muted py-4 small">
+                                                <i class="bi bi-hourglass me-1"></i> Warte auf Daten…
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
+
+        <footer class="mt-4 py-3 border-top">
+            <div class="container-fluid px-4">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 text-muted small">
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
+                        <span><i class="bi bi-cpu me-1 text-primary"></i><strong>IoT Lab Control Center</strong></span>
+                        <span class="d-none d-sm-inline text-muted">·</span>
+                        <span>Raspberry Pi 5 &nbsp;·&nbsp; Zig Backend &nbsp;·&nbsp; Keycloak OIDC</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-3 flex-wrap">
+                        <a href="https://www.lab.local/grafana/" target="_blank" class="text-muted text-decoration-none">
+                            <i class="bi bi-bar-chart-line me-1"></i>Grafana
+                        </a>
+                        <a href="https://www.lab.local/prometheus/" target="_blank" class="text-muted text-decoration-none">
+                            <i class="bi bi-graph-up-arrow me-1"></i>Prometheus
+                        </a>
+                        <span>© 2025</span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
