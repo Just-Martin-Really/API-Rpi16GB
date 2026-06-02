@@ -108,6 +108,16 @@ server {
         proxy_set_header Connection "upgrade";
     }
 
+    # Prometheus UI (read-only metrics, restricted to subnet allowlist above).
+    # No auth beyond the subnet ACL — acceptable for a closed lab network.
+    location /prometheus/ {
+        proxy_pass http://prometheus:9090;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
     location /api/v1/ {
         limit_req zone=api burst=10 nodelay;
         proxy_pass http://backend:8080;

@@ -190,6 +190,52 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
 }
 
 
+/* KPI cards */
+
+.kpi-label {
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.kpi-value {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: color .3s ease;
+}
+
+.kpi-card {
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card) !important;
+}
+
+
+/* Dark mode */
+
+[data-bs-theme="dark"] body::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+
+[data-bs-theme="dark"] .chart-container {
+  background: linear-gradient(180deg, rgba(13, 110, 253, 0.07), transparent 30%);
+}
+
+[data-bs-theme="dark"] .form-control,
+[data-bs-theme="dark"] .input-group-text {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+
 /*  Responsive tweaks */
 
 @media (max-width: 991.98px) {
