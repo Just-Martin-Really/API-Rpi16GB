@@ -321,15 +321,20 @@ function normalizePayload(payload) {
   const sample = rows[0];
 
   if ("temperature" in sample || "humidity" in sample) {
-    // Already grouped — just normalize the timestamp.
-    return rows
-      .map((r) => ({
-        t:           new Date(r.timestamp || r.recorded_at).getTime(),
-        temperature: numOrNull(r.temperature),
-        humidity:    numOrNull(r.humidity),
-      }))
-      .filter((p) => Number.isFinite(p.t))
-      .sort((a, b) => a.t - b.t);
+    // Grouped format may still arrive split (one row per sensor per timestamp),
+    // so bucket by timestamp and merge non-null fields.
+    const byTs = new Map();
+    for (const r of rows) {
+      const ts = new Date(r.timestamp || r.recorded_at).getTime();
+      if (!Number.isFinite(ts)) continue;
+      const bucket = byTs.get(ts) || { t: ts, temperature: null, humidity: null };
+      const temp = numOrNull(r.temperature);
+      const hum  = numOrNull(r.humidity);
+      if (temp !== null) bucket.temperature = temp;
+      if (hum  !== null) bucket.humidity    = hum;
+      byTs.set(ts, bucket);
+    }
+    return [...byTs.values()].sort((a, b) => a.t - b.t);
   }
 
   // Raw format: bucket by timestamp, then assign temperature / humidity
