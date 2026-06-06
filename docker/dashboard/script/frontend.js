@@ -320,13 +320,18 @@ function normalizePayload(payload) {
   // Detect the format by looking at the first row.
   const sample = rows[0];
 
+  // Temperature and humidity are inserted as separate rows with sub-second
+  // differences in recorded_at (Postgres NOW() per INSERT), so bucket by
+  // floored second to merge them into one logical sample.
+  const bucketKey = (ms) => Math.floor(ms / 1000) * 1000;
+
   if ("temperature" in sample || "humidity" in sample) {
-    // Grouped format may still arrive split (one row per sensor per timestamp),
-    // so bucket by timestamp and merge non-null fields.
+    // Grouped format may still arrive split (one row per sensor per timestamp).
     const byTs = new Map();
     for (const r of rows) {
-      const ts = new Date(r.timestamp || r.recorded_at).getTime();
-      if (!Number.isFinite(ts)) continue;
+      const ms = new Date(r.timestamp || r.recorded_at).getTime();
+      if (!Number.isFinite(ms)) continue;
+      const ts = bucketKey(ms);
       const bucket = byTs.get(ts) || { t: ts, temperature: null, humidity: null };
       const temp = numOrNull(r.temperature);
       const hum  = numOrNull(r.humidity);
@@ -337,12 +342,13 @@ function normalizePayload(payload) {
     return [...byTs.values()].sort((a, b) => a.t - b.t);
   }
 
-  // Raw format: bucket by timestamp, then assign temperature / humidity
+  // Raw format: bucket by floored second, assign temperature / humidity
   // based on the sensor_id suffix (or the unit as a fallback).
   const byTs = new Map();
   for (const row of rows) {
-    const ts = new Date(row.recorded_at).getTime();
-    if (!Number.isFinite(ts)) continue;
+    const ms = new Date(row.recorded_at).getTime();
+    if (!Number.isFinite(ms)) continue;
+    const ts = bucketKey(ms);
 
     const bucket = byTs.get(ts) || { t: ts, temperature: null, humidity: null };
     const id = String(row.sensor_id || "");
