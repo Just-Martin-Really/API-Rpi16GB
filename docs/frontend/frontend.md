@@ -8,7 +8,8 @@ Browser-based dashboard for the IoT sensor system. Static files (HTML, CSS, JS, 
 |---|---|
 | `docker/dashboard/` directory | done |
 | `index.html` — login state, logout button, chart, time picker | done |
-| KPI cards (temperature, humidity, system status, monitoring quick-links) | done |
+| KPI cards (temperature, humidity, heater + cooler buttons, combined system + monitoring card) | done |
+| Actuator toggle buttons — heater01 and cooler01, state-aware label, 5-second reconciliation poll | done |
 | Readings table — last 10 sensor rows, newest first | done |
 | Footer — lab name, Grafana and Prometheus links, copyright | done |
 | `favicon.svg` (+ legacy `favicon.ico` reference) | done |
@@ -48,7 +49,10 @@ docker/dashboard/
 | `KEYCLOAK_CONFIG.clientId` | `dashboard-client` | OIDC public client |
 | `API_BASE` | `https://www.lab.local` | Backend base URL (through nginx) |
 | `SENSOR_DATA_ENDPOINT` | `${API_BASE}/api/v1/sensor-data` | Sensor data endpoint |
-| `LIVE_POLL_INTERVAL_MS` | `60000` | How often the live poller refetches (ms) |
+| `ACTUATOR_COMMAND_ENDPOINT` | `${API_BASE}/api/v1/actuator-command` | POST target for heater / cooler toggle |
+| `ACTUATOR_STATES_ENDPOINT` | `${API_BASE}/api/v1/actuator-states` | GET target for current on/off state of each actuator |
+| `LIVE_POLL_INTERVAL_MS` | `60000` | How often the live poller refetches sensor data (ms) |
+| `ACTUATOR_POLL_INTERVAL_MS` | `5000` | How often the actuator state poller reconciles button labels (ms) |
 | `TOKEN_MIN_VALIDITY_SECONDS` | `70` | Minimum remaining token lifetime before a proactive refresh |
 | `TOKEN_REFRESH_INTERVAL_MS` | `60000` | How often the background refresh check runs (ms) |
 
@@ -58,15 +62,15 @@ All constants are at the top of `frontend.js` and can be changed without touchin
 
 The page is divided into three visual rows:
 
-1. **KPI row** — four cards across the top:
+1. **KPI row** — five cards across the top:
    - Temperature (latest value, °C)
    - Humidity (latest value, %)
-   - System status (Online / Offline badge + timestamp)
-   - Monitoring quick-links (Grafana and Prometheus buttons)
+   - Heater (state pill + toggle button → `heater01`, wire commands `HEAT_ON` / `HEAT_OFF`)
+   - Cooler (state pill + toggle button → `cooler01`, wire commands `FAN_ON` / `FAN_OFF`)
+   - Combined system + monitoring card (status badge, last-update timestamp, Grafana and Prometheus shortcuts)
 
 2. **Filter + chart row** — date-range controls on the left, Chart.js
-   time-series chart on the right with an animated LIVE badge when live mode
-   is active.
+   time-series chart on the right with a LIVE badge when live mode is active.
 
 3. **Readings table** — last 10 sensor rows newest-first, with a row-count
    badge in the header.
@@ -95,6 +99,10 @@ A footer at the bottom links to Grafana and Prometheus.
 | `status-badge` | `<span>` | Online / Offline pill badge |
 | `readings-tbody` | `<tbody>` | Last 10 readings table body |
 | `table-count` | `<span>` | Row count badge next to the table header |
+| `.actuator-card[data-actuator="<id>"]` | `<div>` | One card per actuator; the `data-actuator` attribute carries the actuator id |
+| `.actuator-state` (inside an actuator card) | `<span>` | Pill that reads `EIN` / `AUS` / `?` based on the last dispatched command |
+| `.actuator-toggle` (inside an actuator card) | `<button>` | Sends the opposite of the current state; uses `data-on-cmd` / `data-off-cmd` for the wire vocabulary |
+| `.actuator-icon` (inside an actuator card) | `<i>` | Picks up the `actuator-icon-active` class when the relay is on |
 
 ## Authentication flow
 
@@ -175,4 +183,26 @@ Live mode activates when the `date-to` field is empty. The dashboard:
 3. Starts an interval that repeats the same call every `LIVE_POLL_INTERVAL_MS` (60 s).
 
 Live mode stops when the user sets a `date-to` value or logs out.
+
+## Actuator buttons
+
+The heater and cooler cards in the KPI row let an operator override the LSTM's closed-loop control directly from the browser. Each card has the same anatomy: a state pill that reads `EIN` / `AUS` / `?`, an icon that picks up a pulse animation while the relay is on, and a single toggle button whose label flips between `Einschalten` and `Ausschalten` based on the known state.
+
+The `data-actuator`, `data-on-cmd`, and `data-off-cmd` attributes on each button carry everything the click handler needs, so adding a third actuator means dropping in another card with the same template — no JS changes.
+
+**Reconciliation loop**
+
+```
+initApp           → fetchActuatorStates() once, then start poller
+ACTUATOR_POLL     → fetchActuatorStates() every 5 s
+button click      → POST /api/v1/actuator-command (issued_by="user")
+                  → render optimistically (button reflects new state immediately)
+                  → next poll picks up sent_at and confirms / corrects
+```
+
+`fetchActuatorStates()` calls `GET /api/v1/actuator-states`, which returns the latest *dispatched* command per actuator. The dashboard maps each known wire command (`HEAT_ON`, `HEAT_OFF`, `FAN_ON`, `FAN_OFF`) to a boolean via the `WIRE_COMMAND_TO_ON` table; any unknown command falls back to `?` until the next poll. Actuators that have never had a command issued show up as `?` and are still clickable — the first click sends `*_ON`.
+
+**Optimistic update + reconciliation**
+
+A click POSTs the new command but the controller has not yet republished it to MQTT, so a state poll fired right after would still return the previous command. To keep the UI snappy the click handler updates `actuatorState[actuator_id]` and re-renders the card immediately, and the next 5-second poll either confirms (the controller has acked, `sent_at` is now non-null) or quietly corrects the UI if the row was rejected by the controller's regex guard (see `docker/controller/controller.py`).
 

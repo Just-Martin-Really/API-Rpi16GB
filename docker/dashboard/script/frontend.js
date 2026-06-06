@@ -12,10 +12,16 @@ const KEYCLOAK_CONFIG = {
 };
 
 const API_BASE = "https://www.lab.local";
-const SENSOR_DATA_ENDPOINT = `${API_BASE}/api/v1/sensor-data`;
+const SENSOR_DATA_ENDPOINT       = `${API_BASE}/api/v1/sensor-data`;
+const ACTUATOR_COMMAND_ENDPOINT  = `${API_BASE}/api/v1/actuator-command`;
+const ACTUATOR_STATES_ENDPOINT   = `${API_BASE}/api/v1/actuator-states`;
 
 // In live mode (no "to" date) we reload once per minute.
 const LIVE_POLL_INTERVAL_MS = 60_000;
+
+// Actuator state poller runs more often so the button reflects the bus state
+// without manual refresh after a command is queued.
+const ACTUATOR_POLL_INTERVAL_MS = 5_000;
 
 // If the access token has less than 70 seconds left, we refresh it.
 // The check itself runs every minute.
@@ -46,10 +52,25 @@ const dom = {
 };
 
 // Module-wide state.
-let keycloak     = null;
-let chart        = null;
-let livePollId   = null;   // setInterval handle of the live poller
-let liveSinceIso = null;   // "from" timestamp that live mode is anchored to
+let keycloak       = null;
+let chart          = null;
+let livePollId     = null;   // setInterval handle of the live poller
+let liveSinceIso   = null;   // "from" timestamp that live mode is anchored to
+let actuatorPollId = null;   // setInterval handle of the actuator state poller
+
+// Latest known state per actuator, keyed by actuator_id. `on` is the parsed
+// boolean derived from the wire command; `command` is the raw last sent verb.
+// null means we have not received any state yet for that actuator.
+const actuatorState = {};
+
+// Maps every supported wire command to a boolean. Keep in sync with the
+// vocabulary the Pico understands (lstm/control_loop.py: ROLE_COMMAND_TO_WIRE).
+const WIRE_COMMAND_TO_ON = {
+  HEAT_ON:  true,
+  HEAT_OFF: false,
+  FAN_ON:   true,
+  FAN_OFF:  false,
+};
 
 
 document.addEventListener("DOMContentLoaded", initApp);
@@ -117,6 +138,11 @@ async function initApp() {
 
   // Kick off the first load.
   loadData();
+
+  // Actuator state: first fetch + start the poller so the buttons reflect
+  // whatever was on the bus before this tab opened.
+  fetchActuatorStates();
+  startActuatorPolling();
 }
 
 
@@ -162,6 +188,12 @@ function setupUI() {
     });
   });
 
+  // Wire up every actuator toggle. The button's data attributes carry both
+  // the actuator_id and its on/off wire-command pair, so this loop stays
+  // generic if a third actuator appears later.
+  document.querySelectorAll(".actuator-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => onActuatorClick(btn));
+  });
 }
 
 function prefillDefaultTimeRange() {
@@ -324,7 +356,7 @@ function numOrNull(v) {
 function enterLiveMode(fromIso) {
   if (livePollId !== null) return;   // already running
   liveSinceIso = fromIso;
-  dom.liveBadge.style.display = "inline-flex";
+  dom.liveBadge.classList.remove("d-none");
 
   livePollId = setInterval(() => {
     // In live mode we always query from liveSinceIso up to "now".
@@ -338,7 +370,7 @@ function enterLiveMode(fromIso) {
 
 function exitLiveMode() {
   stopLiveMode();
-  dom.liveBadge.style.display = "none";
+  dom.liveBadge.classList.add("d-none");
 }
 
 function stopLiveMode() {
@@ -498,6 +530,163 @@ function updateStatus(online, count, isLive) {
   dom.statusTime.textContent =
     `Aktualisiert: ${new Date().toLocaleTimeString("de-DE")}`;
   console.info(`[chart] ${count} point(s) (${isLive ? "live" : "static"})`);
+}
+
+function startActuatorPolling() {
+  if (actuatorPollId !== null) return;
+  actuatorPollId = setInterval(() => {
+    fetchActuatorStates().catch((e) => console.error("[actuator-poll]", e));
+  }, ACTUATOR_POLL_INTERVAL_MS);
+}
+
+async function fetchActuatorStates() {
+  try {
+    await keycloak.updateToken(TOKEN_MIN_VALIDITY_SECONDS);
+  } catch {
+    keycloak.login();
+    return;
+  }
+
+  let response;
+  try {
+    response = await fetch(ACTUATOR_STATES_ENDPOINT, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${keycloak.token}`,
+        "Accept":        "application/json",
+      },
+    });
+  } catch (err) {
+    console.error("[actuator-states fetch]", err);
+    return;
+  }
+
+  if (response.status === 401) { keycloak.login(); return; }
+  if (!response.ok) {
+    console.warn("[actuator-states] HTTP", response.status);
+    return;
+  }
+
+  let payload;
+  try { payload = await response.json(); } catch { return; }
+
+  const rows = Array.isArray(payload?.actuators) ? payload.actuators : [];
+  for (const row of rows) {
+    const id  = row.actuator_id;
+    const cmd = row.command;
+    if (!id || !cmd) continue;
+    const on = WIRE_COMMAND_TO_ON[cmd] ?? null;
+    actuatorState[id] = { command: cmd, on };
+    renderActuatorCard(id);
+  }
+
+  // Any actuator card that has no entry in the response yet should still get
+  // its initial "unbekannt" render so the button becomes clickable.
+  document.querySelectorAll(".actuator-card").forEach((card) => {
+    const id = card.dataset.actuator;
+    if (!actuatorState[id]) {
+      actuatorState[id] = { command: null, on: null };
+      renderActuatorCard(id);
+    }
+  });
+}
+
+function renderActuatorCard(actuatorId) {
+  const card = document.querySelector(`.actuator-card[data-actuator="${actuatorId}"]`);
+  if (!card) return;
+
+  const state    = actuatorState[actuatorId] || { command: null, on: null };
+  const stateEl  = card.querySelector(".actuator-state");
+  const iconEl   = card.querySelector(".actuator-icon");
+  const btn      = card.querySelector(".actuator-toggle");
+  const btnLabel = btn.querySelector(".actuator-btn-label");
+
+  card.classList.remove("actuator-on", "actuator-off", "actuator-unknown");
+  btn.disabled = false;
+
+  if (state.on === true) {
+    card.classList.add("actuator-on");
+    stateEl.className   = "actuator-state badge rounded-pill bg-success";
+    stateEl.textContent = "EIN";
+    btn.className       = "btn btn-sm btn-outline-danger actuator-toggle";
+    btnLabel.textContent = "Ausschalten";
+    iconEl.classList.add("actuator-icon-active");
+  } else if (state.on === false) {
+    card.classList.add("actuator-off");
+    stateEl.className   = "actuator-state badge rounded-pill bg-secondary";
+    stateEl.textContent = "AUS";
+    btn.className       = "btn btn-sm btn-outline-success actuator-toggle";
+    btnLabel.textContent = "Einschalten";
+    iconEl.classList.remove("actuator-icon-active");
+  } else {
+    card.classList.add("actuator-unknown");
+    stateEl.className   = "actuator-state badge rounded-pill bg-secondary";
+    stateEl.textContent = "?";
+    btn.className       = "btn btn-sm btn-outline-success actuator-toggle";
+    btnLabel.textContent = "Einschalten";
+    iconEl.classList.remove("actuator-icon-active");
+  }
+}
+
+async function onActuatorClick(btn) {
+  const actuatorId = btn.dataset.actuator;
+  const onCmd      = btn.dataset.onCmd;
+  const offCmd     = btn.dataset.offCmd;
+
+  // Choose the opposite of the current state. Unknown state defaults to ON
+  // since the button label is "Einschalten" in that case.
+  const current = actuatorState[actuatorId]?.on;
+  const command = current === true ? offCmd : onCmd;
+
+  // Optimistic disable so a double-click can't queue two opposing commands.
+  const prevLabel = btn.querySelector(".actuator-btn-label").textContent;
+  btn.disabled = true;
+  btn.querySelector(".actuator-btn-label").textContent = "Sende…";
+
+  try {
+    await keycloak.updateToken(TOKEN_MIN_VALIDITY_SECONDS);
+  } catch {
+    keycloak.login();
+    return;
+  }
+
+  let response;
+  try {
+    response = await fetch(ACTUATOR_COMMAND_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${keycloak.token}`,
+        "Content-Type":  "application/json",
+        "Accept":        "application/json",
+      },
+      body: JSON.stringify({
+        actuator_id: actuatorId,
+        command:     command,
+        issued_by:   "user",
+      }),
+    });
+  } catch (err) {
+    btn.disabled = false;
+    btn.querySelector(".actuator-btn-label").textContent = prevLabel;
+    showError(`Netzwerkfehler beim Senden des ${actuatorId}-Befehls.`);
+    console.error("[actuator-command]", err);
+    return;
+  }
+
+  if (response.status === 401) { keycloak.login(); return; }
+  if (!response.ok) {
+    btn.disabled = false;
+    btn.querySelector(".actuator-btn-label").textContent = prevLabel;
+    showError(`Server-Fehler ${response.status} beim Senden des Befehls.`);
+    return;
+  }
+
+  // The row was inserted but the controller has not published it yet, so
+  // `sent_at` is NULL and a poll would still return the previous state.
+  // Render optimistically; the next poll will reconcile.
+  const newOn = WIRE_COMMAND_TO_ON[command] ?? null;
+  actuatorState[actuatorId] = { command, on: newOn };
+  renderActuatorCard(actuatorId);
 }
 
 function showError(message) {
