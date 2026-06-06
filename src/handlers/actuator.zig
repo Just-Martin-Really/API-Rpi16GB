@@ -11,6 +11,43 @@ const SentInput = struct {
     id: i64,
 };
 
+/// GET /api/v1/actuator-states
+/// Returns the latest sent command per actuator_id so the dashboard can
+/// render the current on/off state of each relay. Rows where sent_at IS NULL
+/// are excluded — those are queued but not yet on the wire.
+/// Shape: {"actuators":[{"actuator_id":"...","command":"...","sent_at":"..."}, ...]}
+pub fn listStates(request: *std.http.Server.Request, allocator: std.mem.Allocator, db_conn: *db.Db) !void {
+    const result = try db_conn.query(
+        "SELECT DISTINCT ON (actuator_id) actuator_id, command, sent_at " ++
+            "FROM actuator_commands " ++
+            "WHERE sent_at IS NOT NULL " ++
+            "ORDER BY actuator_id, sent_at DESC",
+    );
+    defer db.clearResult(result);
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator, "{\"actuators\":[");
+    const nrows = db.numRows(result);
+    for (0..nrows) |i| {
+        if (i > 0) try buf.append(allocator, ',');
+        const row = try std.fmt.allocPrint(allocator, "{{\"actuator_id\":\"{s}\",\"command\":\"{s}\",\"sent_at\":\"{s}\"}}", .{
+            db.getValue(result, i, 0),
+            db.getValue(result, i, 1),
+            db.getValue(result, i, 2),
+        });
+        defer allocator.free(row);
+        try buf.appendSlice(allocator, row);
+    }
+    try buf.appendSlice(allocator, "]}");
+
+    try request.respond(buf.items, .{
+        .status = .ok,
+        .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+    });
+}
+
 /// GET /api/v1/actuator-commands
 /// Returns up to 100 unsent rows oldest-first: {"commands":[{"id":N,"actuator_id":"...","command":"..."}, ...]}
 /// controller.py polls this every 2s and publishes each row to MQTT before
