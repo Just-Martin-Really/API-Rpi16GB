@@ -29,7 +29,7 @@ from forecast import forecast as run_forecast, latest_window, load_artifacts, sc
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 TARGET_LOW = float(os.environ.get("TARGET_LOW", "19.0"))
-TARGET_HIGH = float(os.environ.get("TARGET_HIGH", "23.0"))
+TARGET_HIGH = float(os.environ.get("TARGET_HIGH", "21.0"))
 LOOKAHEAD = int(os.environ.get("LOOKAHEAD", "30"))
 LOOP_SECONDS = int(os.environ.get("LOOP_SECONDS", "60"))
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))

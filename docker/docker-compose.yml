@@ -262,7 +262,7 @@ services:
       DATA_SOURCE: api
       API_DAYS: "7"
       TARGET_LOW: "19.0"
-      TARGET_HIGH: "23.0"
+      TARGET_HIGH: "21.0"
       LOOKAHEAD: "30"
       LOOP_SECONDS: "60"
       ACTUATOR_HEATER_ID: actuator01
