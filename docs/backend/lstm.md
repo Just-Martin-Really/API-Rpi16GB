@@ -85,7 +85,7 @@ API_DAYS=7
 
 # ── Control loop ──────────────────────────────────────────────────────────────
 TARGET_LOW=19.0
-TARGET_HIGH=23.0
+TARGET_HIGH=21.0
 LOOKAHEAD=30
 LOOP_SECONDS=60
 ACTUATOR_HEATER_ID=heater01
@@ -367,7 +367,7 @@ lstm:
     LSTM_CLIENT_SECRET_FILE: /run/secrets/keycloak_lstm_secret
     DATA_SOURCE: api
     TARGET_LOW: "19.0"
-    TARGET_HIGH: "23.0"
+    TARGET_HIGH: "21.0"
     LOOKAHEAD: "30"
     LOOP_SECONDS: "60"
     ACTUATOR_HEATER_ID: heater01
