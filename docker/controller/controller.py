@@ -30,6 +30,14 @@ ACTUATOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 SENSOR_ID_RE   = re.compile(r"^[A-Za-z0-9_-]+$")
 COMMAND_RE     = re.compile(r"^[A-Z0-9_]+$")
 
+# Both relays (heater01 and cooler01) live on the same Pico, whose firmware
+# is frozen and subscribes only to actuator01/data. Commands for those
+# actuator_ids must therefore be published to actuator01/data instead of
+# the per-id topic. Other actuator_ids fall through to the per-id topic so
+# future hardware that listens on its own topic still works.
+PICO_ACTUATOR_IDS = frozenset({"heater01", "cooler01"})
+PICO_TOPIC        = "actuator01/data"
+
 # MQTT-Verbindungsparameter
 # Hostname und Port kommen aus Umgebungsvariablen (gesetzt in docker-compose.yml).
 # Benutzername und Passwort werden aus Docker-Secrets gelesen – nie im Code
@@ -417,7 +425,7 @@ def drain_actuator_commands(client):
             api_post("/api/v1/actuator-commands/sent", {"id": row_id})
             continue
 
-        topic   = f"{actuator_id}/data"
+        topic   = PICO_TOPIC if actuator_id in PICO_ACTUATOR_IDS else f"{actuator_id}/data"
         payload = json.dumps({"command": command})
         info    = client.publish(topic, payload, qos=1)
         info.wait_for_publish(timeout=5)

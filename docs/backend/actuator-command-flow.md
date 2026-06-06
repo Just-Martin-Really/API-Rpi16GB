@@ -11,7 +11,7 @@ caller ──► nginx ──► backend ──► postgres (actuator_commands)
                                        │
 controller ──► nginx ──► backend ──────┘
    │
-   └──► mosquitto ──► Pico   (publishes <actuator_id>/data, QoS 1)
+   └──► mosquitto ──► Pico   (publishes actuator01/data for heater01/cooler01, otherwise <actuator_id>/data, QoS 1)
 ```
 
 The flow is decoupled by the `actuator_commands` table. The caller inserts a row and returns immediately. The controller drains pending rows asynchronously and publishes them over MQTT. The controller never opens a direct connection to PostgreSQL; all database access goes through the Zig backend via nginx, mirroring the sensor ingest path.
@@ -60,7 +60,7 @@ Marks one command as sent. Idempotent: subsequent calls for the same id return `
 1. `GET /api/v1/actuator-commands` (HTTPS, `Authorization: Bearer <token>`).
 2. For each row:
     1. Validate `actuator_id` against `^[A-Za-z0-9_-]+$` and `command` against `^[A-Z0-9_]+$`. Rejected rows are marked sent without publishing — this prevents MQTT topic injection if a malicious authenticated caller writes `actuator_id = "$SYS/foo"` or similar.
-    2. Publish `{"command": "<command>"}` to `<actuator_id>/data` at QoS 1 and wait up to 5 s for the broker ack.
+    2. Publish `{"command": "<command>"}` at QoS 1 and wait up to 5 s for the broker ack. Topic is `actuator01/data` when `actuator_id` is `heater01` or `cooler01` (those relays live on the same Pico whose firmware subscribes only to `actuator01/data`), and `<actuator_id>/data` for any other actuator.
     3. On successful publish, `POST /api/v1/actuator-commands/sent` to mark the row.
 3. Sleep `ACTUATOR_POLL_SECONDS` (2 s) and repeat.
 
