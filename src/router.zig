@@ -62,17 +62,17 @@ pub fn dispatch(
     if (auth_header == null) {
         return respondJson(request, .unauthorized, "{\"error\":\"missing authorization header\"}");
     }
-    var verified = false;
+    var matched_audience: ?[]const u8 = null;
     var last_err: anyerror = error.WrongAudience;
     for (route.policies) |p| {
         verifier.verify(io, auth_header.?, p.audience, p.role) catch |err| {
             last_err = err;
             continue;
         };
-        verified = true;
+        matched_audience = p.audience;
         break;
     }
-    if (!verified) {
+    if (matched_audience == null) {
         std.log.warn("auth rejected on {s}: {s}", .{ path, @errorName(last_err) });
         const status: std.http.Status = switch (last_err) {
             error.MissingBearer => .unauthorized,
@@ -84,10 +84,10 @@ pub fn dispatch(
     return switch (route.kind) {
         .sensor_get => sensor.getAll(request, allocator, read_db),
         .sensor_post => sensor.create(request, allocator, write_db),
-        .actuator_post => actuator.create(request, allocator, write_db),
+        .actuator_post => actuator.create(request, allocator, write_db, matched_audience.?),
         .actuator_commands_get => actuator.listOpen(request, allocator, write_db),
         .actuator_commands_sent_post => actuator.markSent(request, allocator, write_db),
-        .actuator_states_get => actuator.listStates(request, allocator, read_db),
+        .actuator_states_get => actuator.listStates(request, allocator, write_db),
         .sensor_request_post => sensor_request.create(request, allocator, write_db),
         .sensor_requests_get => sensor_request.listOpen(request, allocator, write_db),
         .sensor_requests_sent_post => sensor_request.markSent(request, allocator, write_db),

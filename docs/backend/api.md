@@ -105,8 +105,7 @@ The LSTM control loop uses this endpoint in its closed-loop forecast workflow; t
 ```json
 {
   "actuator_id": "actuator01",
-  "command": "FAN_ON",
-  "issued_by": "machine"
+  "command": "FAN_ON"
 }
 ```
 
@@ -114,7 +113,8 @@ The LSTM control loop uses this endpoint in its closed-loop forecast workflow; t
 |-------|------|----------|-------|
 | `actuator_id` | string | yes | max 64 chars, must match `^[A-Za-z0-9_-]+$` to be dispatched by the controller |
 | `command` | string | yes | max 64 chars, must match `^[A-Z0-9_]+$` to be dispatched; current commands: `FAN_ON`, `FAN_OFF`, `HEAT_ON`, `HEAT_OFF`, `on`, `off` |
-| `issued_by` | string | no | `"user"` (default) or `"machine"`; recorded in the row for audit |
+
+`issued_by` is derived from the verified audience — `lstm-client` records `"machine"`, `dashboard-client` records `"user"`. Any `issued_by` field in the request body is ignored, so a dashboard token cannot pollute the audit trail by claiming machine origin.
 
 Rows whose `actuator_id` or `command` fail the regex are accepted by the API but skipped (and marked sent) by the controller to prevent MQTT topic injection from DB content.
 
@@ -296,7 +296,7 @@ The body for both is `{"error":"forbidden"}` (or `{"error":"missing authorizatio
 | POST | `/api/v1/actuator-command`       | `lstm-client` **or** `dashboard-client` | `lstm-control` **or** `dashboard-user` | `iot_write_user` |
 | GET  | `/api/v1/actuator-commands`      | `controller-client` | `controller-ingest` | `iot_write_user` |
 | POST | `/api/v1/actuator-commands/sent` | `controller-client` | `controller-ingest` | `iot_write_user` |
-| GET  | `/api/v1/actuator-states`        | `dashboard-client` **or** `lstm-client` | `dashboard-user` **or** `lstm-control` | `iot_read_user`  |
+| GET  | `/api/v1/actuator-states`        | `dashboard-client` **or** `lstm-client` | `dashboard-user` **or** `lstm-control` | `iot_write_user` |
 | POST | `/api/v1/sensor-request`         | `dashboard-client`  | `dashboard-user`    | `iot_write_user` |
 | GET  | `/api/v1/sensor-requests`        | `controller-client` | `controller-ingest` | `iot_write_user` |
 | POST | `/api/v1/sensor-requests/sent`   | `controller-client` | `controller-ingest` | `iot_write_user` |

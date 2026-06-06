@@ -127,10 +127,18 @@ pub fn markSent(request: *std.http.Server.Request, allocator: std.mem.Allocator,
 }
 
 /// POST /api/v1/actuator-command
-/// Body: {"actuator_id":"actuator01","command":"on","issued_by":"user"}
-/// issued_by is optional: defaults to "user", must be "user" or "machine".
+/// Body: {"actuator_id":"actuator01","command":"on"}
 /// Inserts a command row; controller.py picks it up and publishes to MQTT.
-pub fn create(request: *std.http.Server.Request, allocator: std.mem.Allocator, db_conn: *db.Db) !void {
+///
+/// issued_by is derived from the verified audience, not the request body, so
+/// a dashboard token cannot pollute the audit trail by claiming "machine"
+/// origin. dashboard-client → "user", lstm-client → "machine".
+pub fn create(
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    db_conn: *db.Db,
+    matched_audience: []const u8,
+) !void {
     var body_buf: [4096]u8 = undefined;
     var read_buf: [4096]u8 = undefined;
     const reader = request.readerExpectNone(&read_buf);
@@ -144,14 +152,10 @@ pub fn create(request: *std.http.Server.Request, allocator: std.mem.Allocator, d
         return;
     };
 
-    const issued_by = parsed.value.issued_by orelse "user";
-    if (!std.mem.eql(u8, issued_by, "user") and !std.mem.eql(u8, issued_by, "machine")) {
-        try request.respond("{\"error\":\"issued_by must be 'user' or 'machine'\"}", .{
-            .status = .bad_request,
-            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-        });
-        return;
-    }
+    const issued_by: []const u8 = if (std.mem.eql(u8, matched_audience, "lstm-client"))
+        "machine"
+    else
+        "user";
 
     const actuator_id_z = try allocator.dupeZ(u8, parsed.value.actuator_id);
     const command_z = try allocator.dupeZ(u8, parsed.value.command);

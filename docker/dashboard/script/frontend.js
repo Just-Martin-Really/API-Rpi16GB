@@ -63,6 +63,13 @@ let actuatorPollId = null;   // setInterval handle of the actuator state poller
 // null means we have not received any state yet for that actuator.
 const actuatorState = {};
 
+// Commands the user has just clicked but the controller has not yet
+// dispatched. Poll responses that still show the *previous* command for an
+// actuator with a pending command are ignored so the optimistic UI does not
+// flicker back to the old state. Cleared when the poll returns the pending
+// command (controller acked) or when the click fails.
+const pendingCommand = {};
+
 // Maps every supported wire command to a boolean. Keep in sync with the
 // vocabulary the Pico understands (lstm/control_loop.py: ROLE_COMMAND_TO_WIRE).
 const WIRE_COMMAND_TO_ON = {
@@ -575,6 +582,19 @@ async function fetchActuatorStates() {
     const id  = row.actuator_id;
     const cmd = row.command;
     if (!id || !cmd) continue;
+
+    // Race guard: if the user just clicked but the controller has not yet
+    // dispatched, the poll still returns the previous command. Skip the
+    // update so the optimistic UI does not flicker back. Once the poll
+    // returns the pending command, the controller has acked — clear it.
+    if (pendingCommand[id]) {
+      if (pendingCommand[id] === cmd) {
+        delete pendingCommand[id];
+      } else {
+        continue;
+      }
+    }
+
     const on = WIRE_COMMAND_TO_ON[cmd] ?? null;
     actuatorState[id] = { command: cmd, on };
     renderActuatorCard(id);
@@ -639,13 +659,20 @@ async function onActuatorClick(btn) {
   const command = current === true ? offCmd : onCmd;
 
   // Optimistic disable so a double-click can't queue two opposing commands.
-  const prevLabel = btn.querySelector(".actuator-btn-label").textContent;
-  btn.disabled = true;
-  btn.querySelector(".actuator-btn-label").textContent = "Sende…";
+  const labelEl   = btn.querySelector(".actuator-btn-label");
+  const prevLabel = labelEl.textContent;
+  btn.disabled       = true;
+  labelEl.textContent = "Sende…";
+
+  const restoreButton = () => {
+    btn.disabled       = false;
+    labelEl.textContent = prevLabel;
+  };
 
   try {
     await keycloak.updateToken(TOKEN_MIN_VALIDITY_SECONDS);
   } catch {
+    restoreButton();
     keycloak.login();
     return;
   }
@@ -662,28 +689,28 @@ async function onActuatorClick(btn) {
       body: JSON.stringify({
         actuator_id: actuatorId,
         command:     command,
-        issued_by:   "user",
       }),
     });
   } catch (err) {
-    btn.disabled = false;
-    btn.querySelector(".actuator-btn-label").textContent = prevLabel;
+    restoreButton();
     showError(`Netzwerkfehler beim Senden des ${actuatorId}-Befehls.`);
     console.error("[actuator-command]", err);
     return;
   }
 
-  if (response.status === 401) { keycloak.login(); return; }
+  if (response.status === 401) { restoreButton(); keycloak.login(); return; }
   if (!response.ok) {
-    btn.disabled = false;
-    btn.querySelector(".actuator-btn-label").textContent = prevLabel;
+    restoreButton();
     showError(`Server-Fehler ${response.status} beim Senden des Befehls.`);
     return;
   }
 
   // The row was inserted but the controller has not published it yet, so
   // `sent_at` is NULL and a poll would still return the previous state.
-  // Render optimistically; the next poll will reconcile.
+  // Mark the command as pending so the next poll either confirms it (when
+  // sent_at flips) or is ignored until then; either way the optimistic
+  // render below does not flicker back.
+  pendingCommand[actuatorId] = command;
   const newOn = WIRE_COMMAND_TO_ON[command] ?? null;
   actuatorState[actuatorId] = { command, on: newOn };
   renderActuatorCard(actuatorId);

@@ -195,14 +195,19 @@ The `data-actuator`, `data-on-cmd`, and `data-off-cmd` attributes on each button
 ```
 initApp           → fetchActuatorStates() once, then start poller
 ACTUATOR_POLL     → fetchActuatorStates() every 5 s
-button click      → POST /api/v1/actuator-command (issued_by="user")
+button click      → mark pendingCommand[id], POST /api/v1/actuator-command
                   → render optimistically (button reflects new state immediately)
-                  → next poll picks up sent_at and confirms / corrects
+                  → next poll: pending command matches row → clear pending and apply
+                              otherwise → ignore the row for this actuator
 ```
 
 `fetchActuatorStates()` calls `GET /api/v1/actuator-states`, which returns the latest *dispatched* command per actuator. The dashboard maps each known wire command (`HEAT_ON`, `HEAT_OFF`, `FAN_ON`, `FAN_OFF`) to a boolean via the `WIRE_COMMAND_TO_ON` table; any unknown command falls back to `?` until the next poll. Actuators that have never had a command issued show up as `?` and are still clickable — the first click sends `*_ON`.
 
-**Optimistic update + reconciliation**
+`issued_by` is not sent in the request body. The Zig backend derives it from the verified audience (`dashboard-client` → `"user"`, `lstm-client` → `"machine"`), so a dashboard user cannot impersonate the LSTM in the audit trail.
 
-A click POSTs the new command but the controller has not yet republished it to MQTT, so a state poll fired right after would still return the previous command. To keep the UI snappy the click handler updates `actuatorState[actuator_id]` and re-renders the card immediately, and the next 5-second poll either confirms (the controller has acked, `sent_at` is now non-null) or quietly corrects the UI if the row was rejected by the controller's regex guard (see `docker/controller/controller.py`).
+**Optimistic update + race protection**
+
+A click POSTs the new command but the controller has not yet republished it to MQTT, so a state poll fired right after would still return the previous command and could overwrite the optimistic UI. To prevent the flicker the click handler records the new command in `pendingCommand[actuator_id]` before re-rendering, and `fetchActuatorStates()` skips any row whose command still matches the *previous* state while a pending command exists. Once the controller acks (the poll returns the pending command), the pending entry is cleared and normal reconciliation resumes.
+
+If the click itself fails (network error, 4xx, 5xx), the button label is restored and no pending entry is set, so the next poll re-asserts the real bus state.
 
