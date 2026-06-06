@@ -40,10 +40,10 @@
 
         <div class="container-fluid px-4 py-4">
 
-            <!-- KPI + Status + Quick-Access row -->
+            <!-- KPI + Actuators + Status row -->
             <div class="row g-3 mb-4">
 
-                <div class="col-6 col-md-3 col-xl-2">
+                <div class="col-6 col-md-4 col-xl-2">
                     <div class="card border-0 shadow-sm rounded-3 kpi-card h-100">
                         <div class="card-body p-3">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -58,7 +58,7 @@
                     </div>
                 </div>
 
-                <div class="col-6 col-md-3 col-xl-2">
+                <div class="col-6 col-md-4 col-xl-2">
                     <div class="card border-0 shadow-sm rounded-3 kpi-card h-100">
                         <div class="card-body p-3">
                             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -73,33 +73,73 @@
                     </div>
                 </div>
 
-                <div class="col-12 col-md-3 col-xl-5">
-                    <div class="card border-0 shadow-sm rounded-3 h-100">
-                        <div class="card-body p-3 d-flex align-items-center justify-content-between gap-3">
-                            <div class="min-w-0">
-                                <div class="kpi-label mb-1">System</div>
-                                <div id="status-text" class="fw-medium small text-truncate">Warte auf Daten…</div>
-                                <div id="status-time" class="text-muted" style="font-size:.72rem">—</div>
+                <div class="col-6 col-md-4 col-xl-2">
+                    <div class="card border-0 shadow-sm rounded-3 kpi-card actuator-card h-100" data-actuator="heater01">
+                        <div class="card-body p-3 d-flex flex-column">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="kpi-label">Heizung</span>
+                                <i class="bi bi-fire fs-5 actuator-icon text-danger"></i>
                             </div>
-                            <span id="status-badge" class="badge rounded-pill bg-secondary px-3 py-2 flex-shrink-0">—</span>
+                            <div class="d-flex align-items-center justify-content-between mt-auto gap-2">
+                                <span class="actuator-state badge rounded-pill bg-secondary">—</span>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-secondary actuator-toggle"
+                                        data-actuator="heater01"
+                                        data-on-cmd="HEAT_ON"
+                                        data-off-cmd="HEAT_OFF"
+                                        disabled>
+                                    <span class="actuator-btn-label">Lade…</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="col-12 col-md-3 col-xl-3">
+                <div class="col-6 col-md-4 col-xl-2">
+                    <div class="card border-0 shadow-sm rounded-3 kpi-card actuator-card h-100" data-actuator="cooler01">
+                        <div class="card-body p-3 d-flex flex-column">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="kpi-label">Lüfter</span>
+                                <i class="bi bi-wind fs-5 actuator-icon text-info"></i>
+                            </div>
+                            <div class="d-flex align-items-center justify-content-between mt-auto gap-2">
+                                <span class="actuator-state badge rounded-pill bg-secondary">—</span>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-secondary actuator-toggle"
+                                        data-actuator="cooler01"
+                                        data-on-cmd="FAN_ON"
+                                        data-off-cmd="FAN_OFF"
+                                        disabled>
+                                    <span class="actuator-btn-label">Lade…</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-8 col-xl-4">
                     <div class="card border-0 shadow-sm rounded-3 h-100">
-                        <div class="card-body p-3 d-flex flex-column justify-content-between">
-                            <div class="kpi-label mb-2">Monitoring</div>
-                            <div class="d-flex flex-column gap-2">
+                        <div class="card-body p-3 d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+                            <div class="min-w-0 flex-grow-1">
+                                <div class="d-flex align-items-center gap-2 mb-1">
+                                    <span class="kpi-label">System</span>
+                                    <span id="status-badge" class="badge rounded-pill bg-secondary">—</span>
+                                </div>
+                                <div id="status-text" class="fw-medium small text-truncate">Warte auf Daten…</div>
+                                <div id="status-time" class="text-muted" style="font-size:.72rem">—</div>
+                            </div>
+                            <div class="d-flex flex-row gap-2 flex-shrink-0">
                                 <a href="https://www.lab.local/grafana/" target="_blank"
-                                   class="btn btn-sm btn-outline-primary d-flex align-items-center justify-content-center gap-2 py-2">
+                                   class="btn btn-sm btn-outline-primary d-flex align-items-center gap-2"
+                                   title="Grafana öffnen">
                                     <i class="bi bi-bar-chart-line"></i>
-                                    <span>Grafana</span>
+                                    <span class="d-none d-lg-inline">Grafana</span>
                                 </a>
                                 <a href="https://www.lab.local/prometheus/" target="_blank"
-                                   class="btn btn-sm btn-outline-secondary d-flex align-items-center justify-content-center gap-2 py-2">
+                                   class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-2"
+                                   title="Prometheus öffnen">
                                     <i class="bi bi-graph-up-arrow"></i>
-                                    <span>Prometheus</span>
+                                    <span class="d-none d-lg-inline">Prometheus</span>
                                 </a>
                             </div>
                         </div>
@@ -156,9 +196,9 @@
                                 <p class="card-subtitle text-muted small">Echtzeit-Visualisierung der Temperatur- und Feuchtigkeitssensordaten</p>
                             </div>
                             <div>
-                                <span id="live-badge" class="badge bg-success px-3 py-2 rounded-pill shadow-sm align-middle" style="display: none;">
-                                    <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true"></span>
-                                    LIVE-MODUS AKTIV
+                                <span id="live-badge" class="badge px-3 py-2 rounded-pill d-none align-items-center">
+                                    <span class="spinner-grow me-2" role="status" aria-hidden="true"></span>
+                                    LIVE
                                 </span>
                             </div>
                         </div>

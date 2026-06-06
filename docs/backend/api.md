@@ -96,15 +96,16 @@ Inserts a new sensor reading. Used by the controller service.
 
 Queues a command for an actuator. The controller service picks it up within ~2 seconds and publishes it to the actuator's MQTT topic (`<actuator_id>/data`).
 
-**Required audience:** `lstm-client`
-**Required role:** `lstm-control`
+**Required audience:** `lstm-client` or `dashboard-client`
+**Required role:** `lstm-control` or `dashboard-user`
+
+The LSTM control loop uses this endpoint in its closed-loop forecast workflow; the dashboard uses it for manual operator overrides via the heater and cooler buttons. The `issued_by` field distinguishes the source in the audit trail.
 
 **Request body**
 ```json
 {
   "actuator_id": "actuator01",
-  "command": "FAN_ON",
-  "issued_by": "machine"
+  "command": "FAN_ON"
 }
 ```
 
@@ -112,7 +113,8 @@ Queues a command for an actuator. The controller service picks it up within ~2 s
 |-------|------|----------|-------|
 | `actuator_id` | string | yes | max 64 chars, must match `^[A-Za-z0-9_-]+$` to be dispatched by the controller |
 | `command` | string | yes | max 64 chars, must match `^[A-Z0-9_]+$` to be dispatched; current commands: `FAN_ON`, `FAN_OFF`, `HEAT_ON`, `HEAT_OFF`, `on`, `off` |
-| `issued_by` | string | no | `"user"` (default) or `"machine"`; recorded in the row for audit |
+
+`issued_by` is derived from the verified audience — `lstm-client` records `"machine"`, `dashboard-client` records `"user"`. Any `issued_by` field in the request body is ignored, so a dashboard token cannot pollute the audit trail by claiming machine origin.
 
 Rows whose `actuator_id` or `command` fail the regex are accepted by the API but skipped (and marked sent) by the controller to prevent MQTT topic injection from DB content.
 
@@ -214,6 +216,29 @@ Marks a previously fetched row as dispatched (`sent_at = NOW()`). Idempotent: re
 
 ---
 
+## GET /api/v1/actuator-states
+
+Returns the latest dispatched command per actuator so a UI can render the current on/off state of each relay without polling MQTT directly. Rows whose `sent_at IS NULL` are excluded — those are queued but not yet on the wire, so they do not represent the live bus state.
+
+**Required audience:** `dashboard-client` or `lstm-client`
+**Required role:** `dashboard-user` or `lstm-control`
+
+**Response 200**
+```json
+{
+  "actuators": [
+    {"actuator_id": "cooler01", "command": "FAN_OFF", "sent_at": "2026-06-06 12:00:42.123+00"},
+    {"actuator_id": "heater01", "command": "HEAT_ON", "sent_at": "2026-06-06 12:01:11.987+00"}
+  ]
+}
+```
+
+The list is empty if no actuator has ever had a dispatched command. The shape of `sent_at` is the Postgres text representation of `TIMESTAMPTZ`.
+
+The query uses `SELECT DISTINCT ON (actuator_id) ... ORDER BY actuator_id, sent_at DESC`, so each actuator appears at most once with its most recent dispatched command.
+
+---
+
 ## GET /api/v1/sensor-requests
 
 Returns up to 100 unsent rows from `sensor_requests`, oldest first. Polled by the controller every 2 seconds; each returned row is published to MQTT and then acknowledged via `POST /api/v1/sensor-requests/sent`.
@@ -268,9 +293,10 @@ The body for both is `{"error":"forbidden"}` (or `{"error":"missing authorizatio
 |---|---|---|---|---|
 | GET  | `/api/v1/sensor-data`            | `dashboard-client` **or** `lstm-client` | `dashboard-user` **or** `lstm-control` | `iot_read_user`  |
 | POST | `/api/v1/sensor-data`            | `controller-client` | `controller-ingest` | `iot_write_user` |
-| POST | `/api/v1/actuator-command`       | `lstm-client`       | `lstm-control`      | `iot_write_user` |
+| POST | `/api/v1/actuator-command`       | `lstm-client` **or** `dashboard-client` | `lstm-control` **or** `dashboard-user` | `iot_write_user` |
 | GET  | `/api/v1/actuator-commands`      | `controller-client` | `controller-ingest` | `iot_write_user` |
 | POST | `/api/v1/actuator-commands/sent` | `controller-client` | `controller-ingest` | `iot_write_user` |
+| GET  | `/api/v1/actuator-states`        | `dashboard-client` **or** `lstm-client` | `dashboard-user` **or** `lstm-control` | `iot_write_user` |
 | POST | `/api/v1/sensor-request`         | `dashboard-client`  | `dashboard-user`    | `iot_write_user` |
 | GET  | `/api/v1/sensor-requests`        | `controller-client` | `controller-ingest` | `iot_write_user` |
 | POST | `/api/v1/sensor-requests/sent`   | `controller-client` | `controller-ingest` | `iot_write_user` |

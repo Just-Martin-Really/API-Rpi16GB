@@ -62,17 +62,17 @@ pub fn dispatch(
     if (auth_header == null) {
         return respondJson(request, .unauthorized, "{\"error\":\"missing authorization header\"}");
     }
-    var verified = false;
+    var matched_audience: ?[]const u8 = null;
     var last_err: anyerror = error.WrongAudience;
     for (route.policies) |p| {
         verifier.verify(io, auth_header.?, p.audience, p.role) catch |err| {
             last_err = err;
             continue;
         };
-        verified = true;
+        matched_audience = p.audience;
         break;
     }
-    if (!verified) {
+    if (matched_audience == null) {
         std.log.warn("auth rejected on {s}: {s}", .{ path, @errorName(last_err) });
         const status: std.http.Status = switch (last_err) {
             error.MissingBearer => .unauthorized,
@@ -84,9 +84,10 @@ pub fn dispatch(
     return switch (route.kind) {
         .sensor_get => sensor.getAll(request, allocator, read_db),
         .sensor_post => sensor.create(request, allocator, write_db),
-        .actuator_post => actuator.create(request, allocator, write_db),
+        .actuator_post => actuator.create(request, allocator, write_db, matched_audience.?),
         .actuator_commands_get => actuator.listOpen(request, allocator, write_db),
         .actuator_commands_sent_post => actuator.markSent(request, allocator, write_db),
+        .actuator_states_get => actuator.listStates(request, allocator, write_db),
         .sensor_request_post => sensor_request.create(request, allocator, write_db),
         .sensor_requests_get => sensor_request.listOpen(request, allocator, write_db),
         .sensor_requests_sent_post => sensor_request.markSent(request, allocator, write_db),
@@ -99,6 +100,7 @@ const RouteKind = enum {
     actuator_post,
     actuator_commands_get,
     actuator_commands_sent_post,
+    actuator_states_get,
     sensor_request_post,
     sensor_requests_get,
     sensor_requests_sent_post,
@@ -120,6 +122,21 @@ const policy_sensor_read: RoutePolicies = &.{
     .{ .audience = "lstm-client", .role = "lstm-control" },
 };
 
+// Actuator commands are issued both by the LSTM (machine, closed-loop control)
+// and by the dashboard (operator override via the heater/cooler buttons). The
+// row's issued_by column distinguishes the source for the audit trail.
+const policy_actuator_command: RoutePolicies = &.{
+    .{ .audience = "lstm-client", .role = "lstm-control" },
+    .{ .audience = "dashboard-client", .role = "dashboard-user" },
+};
+
+// Current actuator state is consumed by the dashboard (button reconciliation)
+// and may also be useful to the LSTM in the future.
+const policy_actuator_states: RoutePolicies = &.{
+    .{ .audience = "dashboard-client", .role = "dashboard-user" },
+    .{ .audience = "lstm-client", .role = "lstm-control" },
+};
+
 fn resolveRoute(path: []const u8, method: std.http.Method) ?Route {
     if (std.mem.eql(u8, path, "/api/v1/sensor-data")) {
         return switch (method) {
@@ -129,13 +146,16 @@ fn resolveRoute(path: []const u8, method: std.http.Method) ?Route {
         };
     }
     if (std.mem.eql(u8, path, "/api/v1/actuator-command") and method == .POST) {
-        return .{ .kind = .actuator_post, .policies = policy_lstm };
+        return .{ .kind = .actuator_post, .policies = policy_actuator_command };
     }
     if (std.mem.eql(u8, path, "/api/v1/actuator-commands") and method == .GET) {
         return .{ .kind = .actuator_commands_get, .policies = policy_controller };
     }
     if (std.mem.eql(u8, path, "/api/v1/actuator-commands/sent") and method == .POST) {
         return .{ .kind = .actuator_commands_sent_post, .policies = policy_controller };
+    }
+    if (std.mem.eql(u8, path, "/api/v1/actuator-states") and method == .GET) {
+        return .{ .kind = .actuator_states_get, .policies = policy_actuator_states };
     }
     if (std.mem.eql(u8, path, "/api/v1/sensor-request") and method == .POST) {
         return .{ .kind = .sensor_request_post, .policies = policy_dashboard };
@@ -169,6 +189,7 @@ pub fn routeFor(target: []const u8, method: std.http.Method) metrics.Route {
         .actuator_post => .actuator_post,
         .actuator_commands_get => .actuator_commands_get,
         .actuator_commands_sent_post => .actuator_commands_sent_post,
+        .actuator_states_get => .actuator_states_get,
         .sensor_request_post => .sensor_request_post,
         .sensor_requests_get => .sensor_requests_get,
         .sensor_requests_sent_post => .sensor_requests_sent_post,

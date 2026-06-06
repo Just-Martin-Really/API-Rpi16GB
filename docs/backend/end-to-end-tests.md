@@ -98,20 +98,22 @@ Pico expects.
    (same call as scenario 2 but with `client_id=lstm-client` and
    `client_secret=sc_lstm_client`).
 2. POST one of the four valid wire commands (`HEAT_ON`, `HEAT_OFF`,
-   `FAN_ON`, `FAN_OFF`) tagged `issued_by=machine`:
+   `FAN_ON`, `FAN_OFF`). The backend derives `issued_by` from the
+   verified audience, so the request body has no `issued_by` field:
    ```
    curl -sS --cacert /run/secrets/ca_cert \
      -X POST \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"actuator_id":"heater01","command":"HEAT_OFF","issued_by":"machine"}' \
+     -d '{"actuator_id":"heater01","command":"HEAT_OFF"}' \
      https://www.lab.local/api/v1/actuator-command
    ```
 
 **Pass criteria:** POST returns `200`/`201`, a new row appears in
-`actuator_commands`, the controller picks it up on the next 2-second
-drain poll, mosquitto delivers it to the Pico, and the Pico relay
-clicks. Audible confirmation is enough.
+`actuator_commands` with `issued_by='machine'` (from the lstm-client
+token), the controller picks it up on the next 2-second drain poll,
+mosquitto delivers it to the Pico, and the Pico relay clicks. Audible
+confirmation is enough.
 
 ### 4. Missing token → 401
 

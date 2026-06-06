@@ -147,16 +147,24 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
 /*Live badge*/
 
 #live-badge {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  animation: livePulse 2s ease-in-out infinite;
+  letter-spacing: 0.04em;
+  background-color: rgba(25, 135, 84, 0.12) !important;
+  color: #146c43;
+  border: 1px solid rgba(25, 135, 84, 0.3);
 }
 
-@keyframes livePulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.5); }
-  50%      { box-shadow: 0 0 0 6px rgba(25, 135, 84, 0); }
+/* The badge is shown by removing d-none. Bootstrap's default .badge display
+ * is inline-block, but we want inline-flex so the spinner aligns nicely. */
+#live-badge:not(.d-none) {
+  display: inline-flex !important;
+}
+
+#live-badge .spinner-grow {
+  width: 0.4rem;
+  height: 0.4rem;
+  background-color: #198754;
 }
 
 
@@ -215,6 +223,67 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
 .kpi-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-card) !important;
+}
+
+
+/* Actuator cards */
+
+.actuator-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.actuator-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, transparent 60%, rgba(108, 117, 125, 0.05));
+  transition: background .3s ease;
+}
+
+.actuator-card.actuator-on::before {
+  background: linear-gradient(135deg, transparent 55%, rgba(25, 135, 84, 0.10));
+}
+
+.actuator-card.actuator-off::before {
+  background: linear-gradient(135deg, transparent 60%, rgba(108, 117, 125, 0.06));
+}
+
+.actuator-icon {
+  transition: filter .3s ease, transform .3s ease;
+  opacity: 0.75;
+}
+
+.actuator-icon-active {
+  opacity: 1;
+  filter: drop-shadow(0 0 6px currentColor);
+  animation: actuatorPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes actuatorPulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.08); }
+}
+
+.actuator-state {
+  font-size: .7rem;
+  letter-spacing: .04em;
+  font-weight: 600;
+}
+
+.actuator-toggle {
+  white-space: nowrap;
+  transition: transform .12s ease;
+}
+
+.actuator-toggle:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.actuator-toggle:disabled {
+  opacity: 0.65;
+  cursor: progress;
 }
 
 

@@ -11,6 +11,43 @@ const SentInput = struct {
     id: i64,
 };
 
+/// GET /api/v1/actuator-states
+/// Returns the latest sent command per actuator_id so the dashboard can
+/// render the current on/off state of each relay. Rows where sent_at IS NULL
+/// are excluded — those are queued but not yet on the wire.
+/// Shape: {"actuators":[{"actuator_id":"...","command":"...","sent_at":"..."}, ...]}
+pub fn listStates(request: *std.http.Server.Request, allocator: std.mem.Allocator, db_conn: *db.Db) !void {
+    const result = try db_conn.query(
+        "SELECT DISTINCT ON (actuator_id) actuator_id, command, sent_at " ++
+            "FROM actuator_commands " ++
+            "WHERE sent_at IS NOT NULL " ++
+            "ORDER BY actuator_id, sent_at DESC",
+    );
+    defer db.clearResult(result);
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator, "{\"actuators\":[");
+    const nrows = db.numRows(result);
+    for (0..nrows) |i| {
+        if (i > 0) try buf.append(allocator, ',');
+        const row = try std.fmt.allocPrint(allocator, "{{\"actuator_id\":\"{s}\",\"command\":\"{s}\",\"sent_at\":\"{s}\"}}", .{
+            db.getValue(result, i, 0),
+            db.getValue(result, i, 1),
+            db.getValue(result, i, 2),
+        });
+        defer allocator.free(row);
+        try buf.appendSlice(allocator, row);
+    }
+    try buf.appendSlice(allocator, "]}");
+
+    try request.respond(buf.items, .{
+        .status = .ok,
+        .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
+    });
+}
+
 /// GET /api/v1/actuator-commands
 /// Returns up to 100 unsent rows oldest-first: {"commands":[{"id":N,"actuator_id":"...","command":"..."}, ...]}
 /// controller.py polls this every 2s and publishes each row to MQTT before
@@ -90,10 +127,18 @@ pub fn markSent(request: *std.http.Server.Request, allocator: std.mem.Allocator,
 }
 
 /// POST /api/v1/actuator-command
-/// Body: {"actuator_id":"actuator01","command":"on","issued_by":"user"}
-/// issued_by is optional: defaults to "user", must be "user" or "machine".
+/// Body: {"actuator_id":"actuator01","command":"on"}
 /// Inserts a command row; controller.py picks it up and publishes to MQTT.
-pub fn create(request: *std.http.Server.Request, allocator: std.mem.Allocator, db_conn: *db.Db) !void {
+///
+/// issued_by is derived from the verified audience, not the request body, so
+/// a dashboard token cannot pollute the audit trail by claiming "machine"
+/// origin. dashboard-client → "user", lstm-client → "machine".
+pub fn create(
+    request: *std.http.Server.Request,
+    allocator: std.mem.Allocator,
+    db_conn: *db.Db,
+    matched_audience: []const u8,
+) !void {
     var body_buf: [4096]u8 = undefined;
     var read_buf: [4096]u8 = undefined;
     const reader = request.readerExpectNone(&read_buf);
@@ -107,14 +152,10 @@ pub fn create(request: *std.http.Server.Request, allocator: std.mem.Allocator, d
         return;
     };
 
-    const issued_by = parsed.value.issued_by orelse "user";
-    if (!std.mem.eql(u8, issued_by, "user") and !std.mem.eql(u8, issued_by, "machine")) {
-        try request.respond("{\"error\":\"issued_by must be 'user' or 'machine'\"}", .{
-            .status = .bad_request,
-            .extra_headers = &.{.{ .name = "content-type", .value = "application/json" }},
-        });
-        return;
-    }
+    const issued_by: []const u8 = if (std.mem.eql(u8, matched_audience, "lstm-client"))
+        "machine"
+    else
+        "user";
 
     const actuator_id_z = try allocator.dupeZ(u8, parsed.value.actuator_id);
     const command_z = try allocator.dupeZ(u8, parsed.value.command);
