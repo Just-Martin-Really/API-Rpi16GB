@@ -25,17 +25,24 @@ const TOKEN_REFRESH_INTERVAL_MS = 60_000;
 
 // Grab the DOM elements once so we don't have to keep calling getElementById.
 const dom = {
-  loading:    document.getElementById("loading-state"),
-  app:        document.getElementById("app-container"),
-  username:   document.getElementById("username"),
-  logoutBtn:  document.getElementById("logout-btn"),
-  refreshBtn: document.getElementById("refresh-btn"),
-  dateFrom:   document.getElementById("date-from"),
-  dateTo:     document.getElementById("date-to"),
-  liveBadge:  document.getElementById("live-badge"),
-  errorBox:   document.getElementById("error-message"),
-  errorText:  document.getElementById("error-text"),
-  canvas:     document.getElementById("iotChart"),
+  loading:       document.getElementById("loading-state"),
+  app:           document.getElementById("app-container"),
+  username:      document.getElementById("username"),
+  logoutBtn:     document.getElementById("logout-btn"),
+  refreshBtn:    document.getElementById("refresh-btn"),
+  dateFrom:      document.getElementById("date-from"),
+  dateTo:        document.getElementById("date-to"),
+  liveBadge:     document.getElementById("live-badge"),
+  errorBox:      document.getElementById("error-message"),
+  errorText:     document.getElementById("error-text"),
+  canvas:        document.getElementById("iotChart"),
+  kpiTemp:       document.getElementById("kpi-temp"),
+  kpiHum:        document.getElementById("kpi-hum"),
+  statusText:    document.getElementById("status-text"),
+  statusTime:    document.getElementById("status-time"),
+  statusBadge:   document.getElementById("status-badge"),
+  readingsTbody: document.getElementById("readings-tbody"),
+  tableCount:    document.getElementById("table-count"),
 };
 
 // Module-wide state.
@@ -136,8 +143,6 @@ function startTokenAutoRefresh() {
 
 
 function setupUI() {
-  // Pull the username from the ID token (preferred_username claim).
-  // keycloak-js already decodes the token and exposes it as tokenParsed.
   const username =
     keycloak.tokenParsed?.preferred_username ||
     keycloak.tokenParsed?.name ||
@@ -151,12 +156,12 @@ function setupUI() {
 
   dom.refreshBtn.addEventListener("click", loadData);
 
-  // Pressing Enter inside either date field also triggers a reload.
   [dom.dateFrom, dom.dateTo].forEach((el) => {
     el.addEventListener("keydown", (e) => {
       if (e.key === "Enter") loadData();
     });
   });
+
 }
 
 function prefillDefaultTimeRange() {
@@ -217,6 +222,7 @@ async function fetchAndRender(fromIso, toIso, append) {
     });
   } catch (networkErr) {
     showError("Netzwerkfehler beim Abrufen der Sensordaten.");
+    updateStatus(false, 0);
     console.error("[fetch]", networkErr);
     return;
   }
@@ -234,11 +240,13 @@ async function fetchAndRender(fromIso, toIso, append) {
       "Zugriff verweigert (403): Die erforderliche Rolle fehlt oder das " +
       "Token ist für diese API nicht gültig."
     );
+    updateStatus(false, 0);
     return;
   }
 
   if (!response.ok) {
     showError(`Server-Fehler ${response.status} beim Abrufen der Sensordaten.`);
+    updateStatus(false, 0);
     return;
   }
 
@@ -247,12 +255,13 @@ async function fetchAndRender(fromIso, toIso, append) {
     payload = await response.json();
   } catch {
     showError("Antwort konnte nicht als JSON gelesen werden.");
+    updateStatus(false, 0);
     return;
   }
 
   const points = normalizePayload(payload);
   renderChart(points, append);
-  updateStatusBadge(points.length, toIso === null);
+  updateStatus(true, points.length, toIso === null);
 }
 
 // Brings both possible response formats into the same shape:
@@ -442,19 +451,53 @@ function renderChart(points, append) {
     }
   }
   chart.update();
+  updateKpiCards(points);
+  updateTable(points);
 }
 
+function updateKpiCards(points) {
+  if (!points.length) return;
+  const last = points[points.length - 1];
+  if (last.temperature !== null) dom.kpiTemp.textContent = last.temperature.toFixed(1);
+  if (last.humidity    !== null) dom.kpiHum.textContent  = last.humidity.toFixed(1);
+}
 
-// enter/exitLiveMode() own the LIVE badge visibility; here we just log
-// and re-assert it for safety.
-function updateStatusBadge(count, isLive) {
-  if (isLive) {
-    dom.liveBadge.style.display = "inline-flex";
+function updateTable(points) {
+  const ROWS = 10;
+  dom.tableCount.textContent = `${points.length} Einträge`;
+
+  if (!points.length) {
+    dom.readingsTbody.innerHTML =
+      '<tr><td colspan="3" class="text-center text-muted py-4 small">' +
+      '<i class="bi bi-inbox me-1"></i> Keine Daten im gewählten Zeitraum</td></tr>';
+    return;
   }
-  console.info(
-    `[chart] ${count} data point(s) rendered ` +
-    `(${isLive ? "live mode" : "static range"})`
-  );
+
+  const rows = points.slice(-ROWS).reverse();
+  dom.readingsTbody.innerHTML = rows.map((p) => `
+    <tr>
+      <td class="px-4 py-2 text-muted small">${new Date(p.t).toLocaleString("de-DE")}</td>
+      <td class="px-4 py-2 fw-medium" style="color:var(--color-temp)">${p.temperature !== null ? p.temperature.toFixed(1) : "—"}</td>
+      <td class="px-4 py-2 fw-medium" style="color:var(--color-humidity)">${p.humidity !== null ? p.humidity.toFixed(1) : "—"}</td>
+    </tr>`).join("");
+}
+
+function updateStatus(online, count, isLive) {
+  if (online) {
+    dom.statusBadge.className   = "badge rounded-pill bg-success px-3 py-2 flex-shrink-0";
+    dom.statusBadge.textContent = "Online";
+    dom.statusText.textContent  = count > 0
+      ? `${count} Datenpunkte geladen`
+      : "Keine Daten im Zeitraum";
+    if (isLive) dom.liveBadge.style.display = "inline-flex";
+  } else {
+    dom.statusBadge.className   = "badge rounded-pill bg-danger px-3 py-2 flex-shrink-0";
+    dom.statusBadge.textContent = "Fehler";
+    dom.statusText.textContent  = "Verbindung fehlgeschlagen";
+  }
+  dom.statusTime.textContent =
+    `Aktualisiert: ${new Date().toLocaleTimeString("de-DE")}`;
+  console.info(`[chart] ${count} point(s) (${isLive ? "live" : "static"})`);
 }
 
 function showError(message) {

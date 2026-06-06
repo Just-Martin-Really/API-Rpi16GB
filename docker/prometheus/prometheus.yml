@@ -17,8 +17,10 @@ global:
     pi: rpi16gb
 
 scrape_configs:
-  # Prometheus self-monitoring.
+  # Prometheus self-monitoring. metrics_path must match --web.route-prefix
+  # set in docker-compose.yml (the prefix shifts all routes including /metrics).
   - job_name: prometheus
+    metrics_path: /prometheus/metrics
     static_configs:
       - targets: ["localhost:9090"]
 

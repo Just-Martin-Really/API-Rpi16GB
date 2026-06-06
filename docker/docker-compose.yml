@@ -291,6 +291,8 @@ services:
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=30d
       - --web.listen-address=:9090
+      - --web.external-url=https://www.lab.local/prometheus/
+      - --web.route-prefix=/prometheus/
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus

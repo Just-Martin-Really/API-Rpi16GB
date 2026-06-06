@@ -12,6 +12,10 @@ in [observability.md](observability.md); this page covers Grafana itself.
   (read-only via `grafana_read_user`). Both come up from
   `docker/grafana/provisioning/datasources/` on container start; users
   cannot edit them through the UI.
+  The Prometheus datasource URL is `http://prometheus:9090/prometheus` — not
+  the bare `:9090` root — because Prometheus runs with
+  `--web.route-prefix=/prometheus/`, which shifts all API endpoints (including
+  the ones Grafana queries) under that prefix.
 - Six provisioned dashboards in `docker/grafana/provisioning/dashboards/`:
 
   | UID             | Title                       | Datasource(s)        | Status                   |
@@ -123,6 +127,20 @@ only reachable through nginx.
 
 The Grafana folder used by all provisioned dashboards is `API-Rpi16GB`.
 
+## Provisioning reload
+
+Dashboard JSON files in `docker/grafana/provisioning/dashboards/` are picked
+up automatically — the provisioner rescans every `updateIntervalSeconds`
+seconds (30 s in `dashboards.yml`). No container restart is needed for
+dashboard changes.
+
+Datasource files in `docker/grafana/provisioning/datasources/` are only read
+on container start. To apply a datasource change, restart Grafana:
+
+```sh
+docker compose restart grafana
+```
+
 ## What is intentionally not yet implemented
 
 - **Alerts**. Optional per the Phase 6 spec. Will live in
@@ -156,8 +174,8 @@ docker compose exec prometheus wget -qO- \
 Expected: six dashboards (`system-health`, `service-health`, `lstm`,
 `postgres`, `sensoren`, `actuator`) and two datasources (`Prometheus`,
 `Postgres`). The third call should list the scrape targets Prometheus
-considers up — five once everything is running (prometheus self, backend,
-lstm, postgres_exporter, node_exporter).
+considers up — six once everything is running (prometheus self, backend,
+lstm, controller, postgres_exporter, node_exporter).
 
 For the OIDC flow, open `https://www.lab.local/grafana/` in a browser,
 click "Sign in with Keycloak", log in as `iotuser01` (`Test1234!`), and
