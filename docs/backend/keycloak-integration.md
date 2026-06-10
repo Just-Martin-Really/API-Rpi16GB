@@ -32,32 +32,40 @@ Identity-Provider in den bestehenden Docker-Compose-Stack.
 ```
 VORHER
 ──────
-postgres ──────────────── (enthielt auch keycloak-DB per init-Script)
-keycloak ──────────────── (start-dev, hardcoded Passwörter, keine Healthchecks)
+postgres   enthielt auch keycloak-DB per init-Script
+keycloak   start-dev, hardcoded Passwörter, keine Healthchecks
 
 
 NACHHER
 ───────
-postgres          ──────── Sensor-DB (unverändert)
-keycloak-db       ──────── dedizierte Postgres-Instanz nur für Keycloak
-keycloak          ──────── start-dev --import-realm, Secrets per File, Healthcheck
+postgres      Sensor-DB (unverändert)
+keycloak-db   dedizierte Postgres-Instanz nur für Keycloak
+keycloak      start-dev --import-realm, Secrets per File, Healthcheck
 ```
 
 ### Netzwerk- und Abhängigkeitsgraph
 
-```
-                    app-net
-                      │
-      ┌───────────────┼───────────────────┐
-      │               │                   │
-  postgres        keycloak-db         [ andere Services ]
-      │               │
-  backend          keycloak
-  webserver        (depends_on keycloak-db: service_healthy)
-  archiver
-  lstm
-  controller
-  nginx
+```mermaid
+flowchart TB
+    subgraph appnet["app-net"]
+        postgres[(postgres)]
+        kcdb[(keycloak-db)]
+        others["andere Services"]
+        backend
+        keycloak["keycloak<br/>depends_on keycloak-db: service_healthy"]
+        webserver
+        archiver
+        lstm
+        controller
+        nginx
+    end
+    backend -.->|depends_on| postgres
+    webserver -.->|depends_on| postgres
+    archiver -.->|depends_on| postgres
+    lstm -.->|depends_on| postgres
+    controller -.->|depends_on| postgres
+    nginx -.->|depends_on| postgres
+    keycloak -.->|depends_on: service_healthy| kcdb
 ```
 
 ### Startup-Reihenfolge (relevante Services)
@@ -234,26 +242,31 @@ lstm-client
 
 ### OAuth2-Flows im Überblick
 
+**Browser-Login (dashboard-client)**
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant N as nginx
+    participant K as Keycloak
+    participant Be as Backend
+    B->>N: Login
+    N->>K: Authorization Code + PKCE
+    K-->>B: JWT
+    B->>N: Request mit Authorization-Header
+    N->>Be: JWT im Authorization-Header
 ```
-Browser-Login (dashboard-client)
-─────────────────────────────────
-Browser ──► nginx ──► Keycloak (Authorization Code + PKCE)
-                          │
-                     gibt JWT zurück
-                          │
-Browser ──► nginx ──► Backend (JWT im Authorization-Header)
 
+**Service-to-Service (controller-client / lstm-client)**
 
-Service-to-Service (controller-client / lstm-client)
-─────────────────────────────────────────────────────
-Service ──► Keycloak  POST /auth/realms/iot/protocol/openid-connect/token
-                      grant_type=client_credentials
-                      client_id=controller-client
-                      client_secret=<aus Secret-Datei>
-                          │
-                     gibt Access-Token zurück
-                          │
-Service ──► Backend   Authorization: Bearer <token>
+```mermaid
+sequenceDiagram
+    participant S as Service
+    participant K as Keycloak
+    participant Be as Backend
+    S->>K: POST /auth/realms/iot/protocol/openid-connect/token<br/>grant_type=client_credentials<br/>client_id=controller-client<br/>client_secret=&lt;aus Secret-Datei&gt;
+    K-->>S: Access-Token
+    S->>Be: Authorization: Bearer &lt;token&gt;
 ```
 
 ---

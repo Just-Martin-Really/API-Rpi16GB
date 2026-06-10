@@ -4,14 +4,16 @@ Describes how an actuator command travels from a caller (dashboard, operator scr
 
 ## Overview
 
-```
-caller ──► nginx ──► backend ──► postgres (actuator_commands)
-                                       ▲
-                                       │ poll every 2s
-                                       │
-controller ──► nginx ──► backend ──────┘
-   │
-   └──► mosquitto ──► Pico   (publishes actuator01/data for heater01/cooler01, otherwise <actuator_id>/data, QoS 1)
+```mermaid
+flowchart LR
+    caller[caller] --> n1[nginx]
+    n1 --> b1[backend]
+    b1 --> db[(postgres<br/>actuator_commands)]
+    controller[controller] --> n2[nginx]
+    n2 --> b2[backend]
+    b2 -.->|poll every 2s| db
+    controller --> mq[mosquitto]
+    mq -->|actuator01/data for heater01/cooler01,<br/>else &lt;actuator_id&gt;/data, QoS 1| pico[Pico]
 ```
 
 The flow is decoupled by the `actuator_commands` table. The caller inserts a row and returns immediately. The controller drains pending rows asynchronously and publishes them over MQTT. The controller never opens a direct connection to PostgreSQL; all database access goes through the Zig backend via nginx, mirroring the sensor ingest path.

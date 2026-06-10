@@ -24,34 +24,19 @@ and `--web.route-prefix=/prometheus/`, which shifts all routes — including
 
 ## Scrape topology
 
-```
-                       app-net
-   ┌──────────────────────────────────────────────────────┐
-   │                                                      │
-   │   ┌──────────┐    scrape /metrics                    │
-   │   │ backend  │◄──────────────────┐                   │
-   │   │  :8080   │                   │                   │
-   │   └──────────┘                   │                   │
-   │                                  │                   │
-   │   ┌──────────┐    scrape /metrics │                  │
-   │   │   lstm   │◄──────────────────┤                   │
-   │   │  :8000   │                   │                   │
-   │   └──────────┘                   │                   │
-   │                          ┌───────┴────────┐          │
-   │                          │   prometheus    │          │
-   │                          │     :9090       │          │
-   │                          └───────┬────────┘          │
-   │   ┌────────────────┐             │                   │
-   │   │ postgres_      │◄────────────┤                   │
-   │   │ exporter :9187 │             │                   │
-   │   └────────────────┘             │                   │
-   └──────────────────────────────────┼───────────────────┘
-                                      │ host.docker.internal:9100
-                                      ▼
-                         ┌──────────────────────────┐
-                         │  node_exporter (host)     │
-                         │  proc / sys / hwmon       │
-                         └──────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph appnet["app-net"]
+        prometheus["prometheus :9090"]
+        backend["backend :8080"]
+        lstm["lstm :8000"]
+        pgexp["postgres_exporter :9187"]
+        prometheus -->|scrape /metrics| backend
+        prometheus -->|scrape /metrics| lstm
+        prometheus -->|scrape /metrics| pgexp
+    end
+    node["node_exporter (host)<br/>proc / sys / hwmon"]
+    prometheus -->|host.docker.internal:9100| node
 ```
 
 Targets are configured statically in `docker/prometheus/prometheus.yml`. No

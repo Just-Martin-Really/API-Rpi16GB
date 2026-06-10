@@ -106,19 +106,21 @@ Die ModSecurity-Direktiven aus Kap4 4-17 (`SecRuleEngine`, `SecRequestBodyAccess
 
 ### Docker-Netzwerke
 
-```
-host (RPi 5 16 GB)
-│
-├── app-net (172.20.0.0/24)
-│   ├── nginx      — Reverse Proxy + ModSecurity-WAF (OWASP CRS), einziger Eintrittspunkt aus dem WLAN
-│   ├── backend    — Zig HTTP-Server
-│   ├── postgres   — nicht direkt vom Host erreichbar
-│   ├── mosquitto  — erreichbar für controller
-│   └── controller — MQTT→DB-Bridge
-│
-└── sensor-net (172.21.0.0/24)
-    ├── mosquitto  — Port 8883 ins WLAN exponiert
-    └── controller — abonniert Sensor-Topics, publiziert Aktor-Topics
+```mermaid
+flowchart TB
+    subgraph host["host (RPi 5 16 GB)"]
+        subgraph app["app-net (172.20.0.0/24)"]
+            nginx_a["nginx<br/>Reverse Proxy + ModSecurity-WAF (OWASP CRS),<br/>einziger Eintrittspunkt aus dem WLAN"]
+            backend["backend<br/>Zig HTTP-Server"]
+            postgres["postgres<br/>nicht direkt vom Host erreichbar"]
+            mosquitto_a["mosquitto<br/>erreichbar für controller"]
+            controller_a["controller<br/>MQTT zu DB-Bridge"]
+        end
+        subgraph sensor["sensor-net (172.21.0.0/24)"]
+            mosquitto_s["mosquitto<br/>Port 8883 ins WLAN exponiert"]
+            controller_s["controller<br/>abonniert Sensor-Topics,<br/>publiziert Aktor-Topics"]
+        end
+    end
 ```
 
 `mosquitto` und `controller` sind in beiden Netzwerken. `postgres` ist nur in `app-net` — der Pico kann die DB nie direkt erreichen.
@@ -126,21 +128,34 @@ host (RPi 5 16 GB)
 ### Datenfluss
 
 **Sensor-Messwert:**
-```
-Pico → MQTT/TLS (sensor01/data) → mosquitto → controller.py → INSERT sensor_data → postgres
+```mermaid
+flowchart LR
+    Pico -->|MQTT/TLS<br/>sensor01/data| mosquitto
+    mosquitto --> controller["controller.py"]
+    controller -->|POST /api/v1/sensor-data| backend
+    backend -->|INSERT sensor_data| postgres[(postgres)]
 ```
 
 **Dashboard lesen:**
-```
-Browser → Keycloak Authorization-Code-Flow → Access-Token (dashboard-client)
-Browser → HTTPS → nginx → GET /api/v1/sensor-data → backend (RS256-Check + aud/role) → SELECT → postgres
+```mermaid
+flowchart LR
+    Browser -->|Authorization-Code-Flow| Keycloak
+    Keycloak -->|Access-Token<br/>dashboard-client| Browser
+    Browser -->|HTTPS| nginx
+    nginx -->|GET /api/v1/sensor-data| backend
+    backend -->|RS256-Check + aud/role<br/>SELECT| postgres[(postgres)]
 ```
 
 **Aktor-Befehl (LSTM oder Operator):**
-```
-Service → POST Keycloak Token-Endpoint (client-credentials, lstm-client) → Access-Token
-Service → POST /api/v1/actuator-command → backend (RS256-Check, aud=lstm-client, role=lstm-control) → INSERT actuator_commands
-controller.py (pollt alle 2s) → MQTT publish actuator01/data → mosquitto → Pico
+```mermaid
+flowchart LR
+    Service -->|POST Token-Endpoint<br/>client-credentials, lstm-client| Keycloak
+    Keycloak -->|Access-Token| Service
+    Service -->|POST /api/v1/actuator-command| backend
+    backend -->|RS256-Check<br/>aud=lstm-client, role=lstm-control<br/>INSERT actuator_commands| postgres[(postgres)]
+    controller["controller.py"] -.->|pollt alle 2s<br/>GET /api/v1/actuator-commands| backend
+    controller -->|MQTT publish<br/>actuator01/data| mosquitto
+    mosquitto --> Pico
 ```
 
 ### Sicherheitsprinzipien
