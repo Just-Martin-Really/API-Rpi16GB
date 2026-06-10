@@ -84,16 +84,24 @@ nginx TLS terminator.
 
 ## OIDC login flow
 
-```
-Browser → https://www.lab.local/grafana/login          (Grafana login page)
-       ← redirect → /auth/realms/iot/protocol/openid-connect/auth
-                    (Keycloak login form, same nginx host)
-       → POST credentials → Keycloak (via nginx /auth/)
-       ← redirect with code → https://www.lab.local/grafana/login/generic_oauth?code=...
-       → Grafana exchanges code for tokens at http://keycloak:8080/...
-         (internal, no TLS, no nginx)
-       → Grafana reads realm_access.roles from the access token
-       → role_attribute_path JMESPath assigns Viewer / GrafanaAdmin
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant N as nginx
+    participant G as Grafana
+    participant K as Keycloak
+    B->>N: GET /grafana/login
+    N->>G: proxy
+    G-->>B: redirect to /auth/realms/iot/protocol/openid-connect/auth
+    B->>N: GET Keycloak login form (same host)
+    N->>K: proxy
+    B->>N: POST credentials
+    N->>K: proxy
+    K-->>B: redirect with code to /grafana/login/generic_oauth?code=...
+    B->>G: code
+    G->>K: exchange code for tokens (http://keycloak:8080, internal, no TLS)
+    G->>G: read realm_access.roles from access token
+    G->>G: role_attribute_path JMESPath assigns Viewer / GrafanaAdmin
 ```
 
 `GF_AUTH_GENERIC_OAUTH_AUTH_URL` points at the public hostname because the

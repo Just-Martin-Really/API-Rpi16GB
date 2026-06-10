@@ -4,18 +4,21 @@ Describes how a sensor data request (e.g. an emergency "read now") travels from 
 
 ## Overview
 
-```
-caller ──► nginx ──► backend ──► postgres (sensor_requests)
-                                       ▲
-                                       │ poll every 2s
-                                       │
-controller ──► nginx ──► backend ──────┘
-   │
-   └──► mosquitto ──► Pico   (publishes <sensor_id>/request, QoS 1)
-                       │
-                       │ Pico reads DHT22 and publishes <sensor_id>/data
-                       ▼
-                  mosquitto ──► controller ──► nginx ──► backend ──► postgres (sensor_data)
+```mermaid
+flowchart LR
+    caller --> n1[nginx]
+    n1 --> b1[backend]
+    b1 --> reqdb[(postgres<br/>sensor_requests)]
+    controller1[controller] --> n2[nginx]
+    n2 --> b2[backend]
+    b2 -.->|poll every 2s| reqdb
+    controller1 --> mq1[mosquitto]
+    mq1 -->|&lt;sensor_id&gt;/request, QoS 1| pico[Pico]
+    pico -->|reads DHT22<br/>publishes &lt;sensor_id&gt;/data| mq2[mosquitto]
+    mq2 --> controller2[controller]
+    controller2 --> n3[nginx]
+    n3 --> b3[backend]
+    b3 --> datadb[(postgres<br/>sensor_data)]
 ```
 
 The request path mirrors the actuator command flow: the caller inserts a row into `sensor_requests` and returns immediately, the controller drains pending rows on its 2s tick and publishes them over MQTT. The Pico is responsible for the response leg, which reuses the existing sensor data path.

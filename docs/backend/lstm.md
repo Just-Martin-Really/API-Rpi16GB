@@ -156,29 +156,16 @@ lstm/
 
 The control loop never talks to the controller directly. The two are decoupled by `actuator_commands` in postgres, the same table the dashboard uses:
 
-```
-sensor01 ──── MQTT ────► mosquitto ──── webserver ────► sensor_data
-                                                            │
-                                                            │ GET /api/v1/sensor-data
-                                                            │ (RS256 bearer, as lstm-client)
-                                                            ▼
-                                            ┌──────────────────────────────┐
-                                            │   lstm/control_loop.py       │
-                                            │                              │
-                                            │   1. pull last 240 minutes   │
-                                            │   2. model.predict(window)   │
-                                            │   3. decide(forecast)        │
-                                            │   4. diff(last_state)        │
-                                            └──────────────────────────────┘
-                                                            │
-                                                            │ POST /api/v1/actuator-command
-                                                            │ {issued_by: "machine"}
-                                                            ▼
-                                                   actuator_commands
-                                                            │
-                                                            │ poll every 2s
-                                                            ▼
-                                            controller.py ──── MQTT ────► Pico (heater/cooler)
+```mermaid
+flowchart TB
+    sensor01 -->|MQTT| mosquitto
+    mosquitto --> webserver
+    webserver --> sensor_data[(sensor_data)]
+    sensor_data -->|GET /api/v1/sensor-data<br/>RS256 bearer, as lstm-client| loop
+    loop["lstm/control_loop.py<br/>1. pull last 240 minutes<br/>2. model.predict(window)<br/>3. decide(forecast)<br/>4. diff(last_state)"]
+    loop -->|POST /api/v1/actuator-command<br/>{issued_by: machine}| actuator_commands[(actuator_commands)]
+    actuator_commands -.->|poll every 2s| controller
+    controller["controller.py"] -->|MQTT| Pico["Pico (heater/cooler)"]
 ```
 
 The LSTM is one of several command sources. Dashboard buttons write to the same table with `issued_by='user'`. `controller.py` drains them all identically, so the LSTM does not need any controller-side changes to take effect; it just inserts rows. `issued_by` is purely for auditing which source produced which command.

@@ -16,19 +16,21 @@ The WLAN-AP is the only gateway to the lab LAN. The backend is not directly reac
 
 Two isolated bridge networks enforce least-privilege between container groups.
 
-```
-host (RPi 5 16 GB)
-│
-├── app-net (172.20.0.0/24)
-│   ├── nginx — reverse proxy + ModSecurity WAF (OWASP CRS), sole HTTPS entry point from WLAN and controller
-│   ├── backend — Zig HTTP server, business logic, database access
-│   ├── postgres — PostgreSQL, not exposed to host
-│   ├── mosquitto — also on app-net for internal service communication
-│   └── controller — MQTT→HTTPS API bridge, forwards sensor readings via nginx
-│
-└── sensor-net (172.21.0.0/24)
-    ├── mosquitto — exposed on port 8883 to the Production WLAN
-    └── controller — subscribes to sensor topics, publishes actuator topics
+```mermaid
+flowchart TB
+    subgraph host["host (RPi 5 16 GB)"]
+        subgraph app["app-net (172.20.0.0/24)"]
+            nginx_a["nginx<br/>reverse proxy + ModSecurity WAF (OWASP CRS),<br/>sole HTTPS entry point from WLAN and controller"]
+            backend["backend<br/>Zig HTTP server, business logic, database access"]
+            postgres["postgres<br/>PostgreSQL, not exposed to host"]
+            mosquitto_a["mosquitto<br/>internal service communication"]
+            controller_a["controller<br/>MQTT to HTTPS API bridge,<br/>forwards sensor readings via nginx"]
+        end
+        subgraph sensor["sensor-net (172.21.0.0/24)"]
+            mosquitto_s["mosquitto<br/>exposed on port 8883 to the Production WLAN"]
+            controller_s["controller<br/>subscribes to sensor topics,<br/>publishes actuator topics"]
+        end
+    end
 ```
 
 `mosquitto` and `controller` are on both networks. `postgres` is only on `app-net` and is never exposed to the host or sensor network.
